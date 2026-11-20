@@ -11,14 +11,14 @@ starboard intensities, interpolated navigation and the 3DSS bathymetry per ping)
    GMRF prior given the others. Depths are measured down from :math:`z_\mathrm{ref}`, the
    median sonar height.
 2. :math:`\theta`: :math:`L`, :math:`N_c`, :math:`\epsilon_c` and the gain are the
-   prototype's calibrated values. :math:`\eta_c`, :math:`\zeta_c`, :math:`\ell_c` are fitted
-   by maximum likelihood over every 100th ping together with one :math:`\log\kappa` per ping
-   and side, at the fixed seabed; the prior on :math:`\log\kappa` is set from
-   those fits.
+   prototype's calibrated values. :math:`\eta_c`, :math:`\zeta_c`, :math:`\ell_c` and the prior
+   on :math:`\log\kappa` come from `bbf.inference.calibrate` over the lit bins of every 100th
+   ping, at the fixed seabed.
 3. Figure: measured and predicted intensity along range for both sides of one ping, with
    :math:`\bar I` at the Laplace mode of :math:`\log\kappa`.
 """
 import argparse
+import dataclasses
 from pathlib import Path
 
 import jax
@@ -26,10 +26,10 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from prototype_theta import EPS, GAIN_DB, L_SHAPE, NOISE
-from scipy.optimize import minimize
 from seabed_3dss import bathymetry_world, seabed_on_mesh
 
 from bbf import ping as P
+from bbf.inference.calibrate import calibrate
 from bbf.io import load_depths, load_patch
 
 jax.config.update("jax_enable_x64", True)
@@ -47,36 +47,6 @@ def render_pings(mesh, d, X, idx, n_bins, dr, theta, u):
         for side in (P.PORT, P.STARBOARD):
             S[k, side] = np.asarray(render(jnp.asarray(X[i]), side))
     return S
-
-
-def fit_spikes(y, S, r, theta0):
-    r"""ML fit of :math:`\log\eta_c, \log\zeta_c, \log\ell_c` and one :math:`\log\kappa` per ping and side."""
-    m = y.shape[0]
-    ok = y > 0
-    ys = np.where(ok, y, 1.0)
-    logg = np.stack([np.asarray(P.log_gain(r, GAIN_DB[c])) for c in (0, 1)])
-    yj, Sj, okj, gj, rj = (jnp.asarray(a) for a in (ys, S, ok, np.exp(logg), r))
-
-    def nll(x):
-        log_eta, log_zeta, log_ell, u = x[0:2], x[2:4], x[4:6], x[6:].reshape(m, 2)
-        I_bar = gj * (jnp.exp(u)[..., None] * Sj + jnp.asarray(NOISE)[:, None])
-        extra = jnp.exp(log_eta)[:, None] + jnp.exp(log_zeta)[:, None] * jnp.exp(-rj / jnp.exp(log_ell)[:, None])
-        I_sp = I_bar + gj * extra
-        lp = jnp.logaddexp(jnp.log1p(-jnp.asarray(EPS))[:, None] + P.log_gamma(yj, L_SHAPE, I_bar),
-                           jnp.log(jnp.asarray(EPS))[:, None] + P.log_gamma(yj, 1.0, I_sp))
-        return -jnp.sum(jnp.where(okj, lp, 0.0))
-
-    f = jax.jit(jax.value_and_grad(nll))
-    sig = (S > 0) & ok
-    u0 = np.array([[np.log(np.median(ys[k, c][sig[k, c]] / np.exp(logg[c])[sig[k, c]])
-                           / np.median(S[k, c][sig[k, c]])) if sig[k, c].any() else 0.0
-                    for c in (0, 1)] for k in range(m)])
-    x0 = np.concatenate([np.log(theta0["eta"]), np.log(theta0["zeta"]), np.log(theta0["ell"]), u0.ravel()])
-    res = minimize(lambda x: tuple(np.asarray(v, dtype=float) for v in f(jnp.asarray(x))), x0, jac=True,
-                   method="L-BFGS-B", options={"maxiter": 2000})
-    x = res.x
-    return {"eta": np.exp(x[0:2]), "zeta": np.exp(x[2:4]), "ell": np.exp(x[4:6]), "u": x[6:].reshape(m, 2),
-            "nll": float(res.fun), "converged": bool(res.success)}
 
 
 def main():
@@ -113,11 +83,11 @@ def main():
                    log_kappa_std=1.0, gain_db=GAIN_DB)
     S = render_pings(mesh, d, X_local, idx, n_bins, dr, base, u)
 
+    labels = np.stack([[P.block_labels(y[k, c], base, c, dr) for c in (0, 1)] for k in range(len(idx))])
+    use = np.stack([P.ping_use(labels[k], n_bins, base.block) for k in range(len(idx))])
     wc = np.median(y[:, :, (r_bin > 6) & (r_bin < 12)], axis=(0, 2))
-    fit = fit_spikes(y, S, r_bin, {"eta": 100 * wc, "zeta": 1e4 * wc, "ell": np.full(2, 2.0)})
-    u_fit = fit["u"]
-    theta = P.Theta(noise=NOISE, L=L_SHAPE, eps=EPS, eta=fit["eta"], zeta=fit["zeta"], ell=fit["ell"],
-                    log_kappa_mean=u_fit.mean(0), log_kappa_std=np.maximum(u_fit.std(0), 0.5), gain_db=GAIN_DB)
+    start = dataclasses.replace(base, eta=100 * wc, zeta=1e4 * wc, ell=np.full(2, 2.0))
+    theta, fit = calibrate(y, S, use, start, dr)
     print(f"fit over {len(idx)} pings (converged {fit['converged']}): "
           f"eta {theta.eta}, zeta {theta.zeta}, ell {theta.ell} m, "
           f"log kappa {theta.log_kappa_mean} ± {theta.log_kappa_std}")
