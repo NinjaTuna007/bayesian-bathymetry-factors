@@ -35,4 +35,4 @@ Set `SSS_DATA` to the directory holding the `rosbag2_*` survey bags, e.g. in an 
 
 ## Status
 
-Mesh, prior and ping factor implemented; the match factor, inference and io are still placeholders. A tagged release will be the first version that runs.
+Mesh, prior, ping, shadow and match factors implemented, with a reader for the prototype's patch cache; inference is still a placeholder. A tagged release will be the first version that runs.
