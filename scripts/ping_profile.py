@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+r"""Range profile of one ping under the bbf ping factor, rebuilt from the prototype's figure.
+
+Usage: python scripts/ping_profile.py PATCHES.npz [--patch A] [--ping 600] [--out figs/ping_profile.png]
+
+PATCHES.npz is the prototype's patch cache (``cache/<bag>_patches.npz``: raw port and
+starboard intensities, interpolated navigation and the 3DSS bathymetry per ping).
+
+1. Seabed: the 3DSS bathymetry points, moved to the world frame with each ping's pose, are
+   averaged onto the mesh vertices; vertices without points get the conditional mean of the
+   GMRF prior given the others. Depths are measured down from :math:`z_\mathrm{ref}`, the
+   median sonar height.
+2. :math:`\theta`: :math:`L`, :math:`N_c`, :math:`\epsilon_c` and the gain are the
+   prototype's calibrated values. :math:`\eta_c`, :math:`\zeta_c`, :math:`\ell_c` are fitted
+   by maximum likelihood over every 100th ping together with one :math:`\log\kappa` per ping
+   and side, at the fixed seabed and visibility; the prior on :math:`\log\kappa` is set from
+   those fits.
+3. Figure: measured and predicted intensity along range for both sides of one ping, with
+   :math:`\bar I` at the Laplace mode of :math:`\log\kappa`, and the distribution of
+   :math:`y / \bar I` over the non-spike bins of the fitted pings against
+   :math:`\mathrm{Gam}(L, 1/L)`.
+"""
+from __future__ import annotations
+
+import argparse
+import math
+from pathlib import Path
+
+import jax
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
+from scipy.optimize import minimize
+from scipy.stats import gamma as gamma_dist
+
+from bbf import mesh as M
+from bbf import ping as P
+from bbf import prior as PR
+
+jax.config.update("jax_enable_x64", True)
+
+# Calibrated in the prototype (scripts/match_factor.py THETA_*, patch A, 2026-11-18).
+GAIN_DB = np.array([[0.0, 0.65, 0.0], [0.0, 0.0, 4.1]])
+L_SHAPE = 0.48
+NOISE = np.array([9.33e8, 5.28e7])
+EPS = np.array([0.055, 0.021])
+
+H_MESH, BUFFER = 0.5, 5.0
+RHO, SIGMA, SIGMA_OBS = 3.0, 2.0, 0.05  # fill-in prior: range, std, per-point noise (m)
+FIT_EVERY = 100
+
+
+def load_patch(path: Path, name: str) -> dict[str, np.ndarray]:
+    z = np.load(path)
+    return {k.split("/", 1)[1]: z[k] for k in z.files if k.startswith(f"{name}/")}
+
+
+def poses(p: dict) -> np.ndarray:
+    """(n, 6) world poses (x, y, z, roll, pitch, yaw) of every ping, in patch coordinates."""
+    return np.column_stack([p["x"], p["y"], p["alt"], p["roll"], p["pitch"], p["yaw"]])
+
+
+def bathymetry_world(p: dict, X: np.ndarray, every: int = 2) -> np.ndarray:
+    """3DSS points of every `every`-th ping in the world frame, (m, 3)."""
+    frames = jax.vmap(P.pose_frame)(jnp.asarray(X))
+    s, R = np.asarray(frames[0]), np.asarray(frames[1])
+    k = p["bathy_ping"]
+    keep = k % every == 0
+    k = k[keep]
+    pts = np.column_stack([p["bathy_x"], p["bathy_y"], p["bathy_z"]])[keep].astype(float)
+    return s[k] + np.einsum("mij,mj->mi", R[k], pts)
+
+
+def seabed_on_mesh(world: np.ndarray, z_ref: float) -> tuple[M.Mesh, np.ndarray, np.ndarray]:
+    """Mesh over the points, depths from the points, and the vertices that had points."""
+    lo, hi = world[:, :2].min(0), world[:, :2].max(0)
+    mesh = M.build(lo[0], hi[0], lo[1], hi[1], h=H_MESH, buffer=BUFFER, z_ref=z_ref)
+    q = mesh.to_local(world[:, :2])
+    tri, bary, inside = (np.asarray(a) for a in M.locate(mesh, q))
+    vert = mesh.triangles[tri, np.argmax(bary, axis=1)]
+    depth = z_ref - world[:, 2]
+    # drop points far off a robust plane (water-column detections)
+    A = np.column_stack([q, np.ones(len(q))])
+    coef = np.linalg.lstsq(A[inside], depth[inside], rcond=None)[0]
+    res = depth - A @ coef
+    mad = np.median(np.abs(res[inside]))
+    ok = inside & (np.abs(res) < 10 * mad + 0.5)
+    n = np.bincount(vert[ok], minlength=mesh.n_vertices).astype(float)
+    mean = np.bincount(vert[ok], depth[ok], minlength=mesh.n_vertices) / np.maximum(n, 1)
+    # conditional mean of the GMRF given the vertex averages
+    prior = PR.Prior(mesh, RHO, SIGMA, mu_beta=coef, Sigma_beta=np.eye(3))
+    W = sp.diags(n / SIGMA_OBS**2)
+    rhs = prior.Lambda @ (prior.X @ coef) + W @ mean
+    d = np.asarray(spla.spsolve((prior.Lambda + W).tocsc(), rhs))
+    return mesh, d, n > 0
+
+
+def render_pings(mesh, d, X, idx, n_bins, dr, theta, u):
+    """Unit intensities (len(idx), 2, n_bins) and visibility masks at the fixed seabed."""
+    S = np.zeros((len(idx), 2, n_bins))
+    dj = jnp.asarray(d)
+    render = jax.jit(lambda pose, side, vis: P.unit_intensity(mesh, dj, pose, side, theta, u, n_bins, dr, vis),
+                     static_argnums=1)
+    for k, i in enumerate(idx):
+        pose = jnp.asarray(X[i])
+        for side in (P.PORT, P.STARBOARD):
+            vis = jnp.asarray(P.visibility(mesh, dj, pose, side, u))
+            S[k, side] = np.asarray(render(pose, side, vis))
+    return S
+
+
+def fit_spikes(y, S, r, theta0):
+    r"""ML fit of :math:`\log\eta_c, \log\zeta_c, \log\ell_c` and one :math:`\log\kappa` per ping and side."""
+    m = y.shape[0]
+    ok = y > 0
+    ys = np.where(ok, y, 1.0)
+    logg = np.stack([np.asarray(P.log_gain(r, GAIN_DB[c])) for c in (0, 1)])
+    yj, Sj, okj, gj, rj = (jnp.asarray(a) for a in (ys, S, ok, np.exp(logg), r))
+
+    def nll(x):
+        log_eta, log_zeta, log_ell, u = x[0:2], x[2:4], x[4:6], x[6:].reshape(m, 2)
+        I_bar = gj * (jnp.exp(u)[..., None] * Sj + jnp.asarray(NOISE)[:, None])
+        extra = jnp.exp(log_eta)[:, None] + jnp.exp(log_zeta)[:, None] * jnp.exp(-rj / jnp.exp(log_ell)[:, None])
+        I_sp = I_bar + gj * extra
+        lp = jnp.logaddexp(jnp.log1p(-jnp.asarray(EPS))[:, None] + P.log_gamma(yj, L_SHAPE, I_bar),
+                           jnp.log(jnp.asarray(EPS))[:, None] + P.log_gamma(yj, 1.0, I_sp))
+        return -jnp.sum(jnp.where(okj, lp, 0.0))
+
+    f = jax.jit(jax.value_and_grad(nll))
+    sig = (S > 0) & ok
+    u0 = np.array([[np.log(np.median(ys[k, c][sig[k, c]] / np.exp(logg[c])[sig[k, c]])
+                           / np.median(S[k, c][sig[k, c]])) if sig[k, c].any() else 0.0
+                    for c in (0, 1)] for k in range(m)])
+    x0 = np.concatenate([np.log(theta0["eta"]), np.log(theta0["zeta"]), np.log(theta0["ell"]), u0.ravel()])
+    res = minimize(lambda x: tuple(np.asarray(v, dtype=float) for v in f(jnp.asarray(x))), x0, jac=True,
+                   method="L-BFGS-B", options={"maxiter": 2000})
+    x = res.x
+    return {"eta": np.exp(x[0:2]), "zeta": np.exp(x[2:4]), "ell": np.exp(x[4:6]), "u": x[6:].reshape(m, 2),
+            "nll": float(res.fun), "converged": bool(res.success)}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
+    ap.add_argument("patches", type=Path)
+    ap.add_argument("--patch", default="A")
+    ap.add_argument("--ping", type=int, default=600)
+    ap.add_argument("--out", type=Path, default=Path("figs/ping_profile.png"))
+    args = ap.parse_args()
+
+    p = load_patch(args.patches, args.patch)
+    X = poses(p)
+    n_bins, dr = p["port"].shape[1], float(p["range_res"])
+    r_bin = np.asarray(P.bin_ranges(n_bins, dr))
+    z_ref = float(np.median(p["alt"]))
+
+    world = bathymetry_world(p, X)
+    mesh, d, seen = seabed_on_mesh(world, z_ref)
+    print(f"mesh {mesh.n_vertices} vertices, {seen.mean():.0%} with 3DSS points; "
+          f"depth {np.percentile(d[seen], 1):.1f}–{np.percentile(d[seen], 99):.1f} m below z_ref = {z_ref:.2f}")
+    X_local = X.copy()
+    X_local[:, :2] = mesh.to_local(X[:, :2])
+
+    idx = np.arange(0, len(X), FIT_EVERY)
+    if args.ping not in idx:
+        idx = np.sort(np.append(idx, args.ping))
+    y = np.stack([np.stack([p["port"][i], p["starboard"][i]]).astype(float) ** 2 for i in idx])
+    u = P.u_grid(n_bins, dr)
+    base = P.Theta(noise=NOISE, L=L_SHAPE, eps=EPS, eta=1.0, zeta=1.0, ell=1.0, log_kappa_mean=0.0,
+                   log_kappa_std=1.0, gain_db=GAIN_DB)
+    S = render_pings(mesh, d, X_local, idx, n_bins, dr, base, u)
+
+    wc = np.median(y[:, :, (r_bin > 6) & (r_bin < 12)], axis=(0, 2))
+    fit = fit_spikes(y, S, r_bin, {"eta": 100 * wc, "zeta": 1e4 * wc, "ell": np.full(2, 2.0)})
+    u_fit = fit["u"]
+    theta = P.Theta(noise=NOISE, L=L_SHAPE, eps=EPS, eta=fit["eta"], zeta=fit["zeta"], ell=fit["ell"],
+                    log_kappa_mean=u_fit.mean(0), log_kappa_std=np.maximum(u_fit.std(0), 0.5), gain_db=GAIN_DB)
+    print(f"fit over {len(idx)} pings (converged {fit['converged']}): "
+          f"eta {theta.eta}, zeta {theta.zeta}, ell {theta.ell} m, "
+          f"log kappa {theta.log_kappa_mean} ± {theta.log_kappa_std}")
+
+    # predicted means at the Laplace mode, and spike responsibilities
+    I_bar, I_sp, resp = np.zeros_like(y), np.zeros_like(y), np.zeros_like(y)
+    for k in range(len(idx)):
+        for c in (0, 1):
+            u_hat, _ = P.mode(theta, c, dr, jnp.asarray(y[k, c]), jnp.asarray(S[k, c]), jnp.ones(n_bins, bool))
+            a, b = (np.asarray(v) for v in P.predicted(jnp.asarray(S[k, c]), u_hat, theta, c, dr))
+            I_bar[k, c], I_sp[k, c] = a, b
+            ys = np.where(y[k, c] > 0, y[k, c], 1.0)
+            lm = math.log1p(-EPS[c]) + np.asarray(P.log_gamma(ys, L_SHAPE, a))
+            ls = math.log(EPS[c]) + np.asarray(P.log_gamma(ys, 1.0, b))
+            resp[k, c] = np.exp(ls - np.logaddexp(lm, ls))
+
+    k = int(np.flatnonzero(idx == args.ping)[0])
+    i = idx[k]
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    for c, name in ((P.PORT, "port"), (P.STARBOARD, "starboard")):
+        ax = axs[c]
+        ax.semilogy(r_bin, np.maximum(y[k, c], 1), lw=0.3, color="0.6", label="measured $y$")
+        ax.semilogy(r_bin, I_bar[k, c], color="C3", lw=1.2, label=r"predicted $\bar I = g(\hat\kappa S + N)$")
+        ax.semilogy(r_bin, I_sp[k, c], color="C1", lw=0.8, ls=":", label="spike component mean")
+        first = np.flatnonzero(S[k, c] > 0)
+        if len(first):
+            ax.axvline(r_bin[first[0]], color="C0", ls="--", lw=0.8, label="rendered first return (3DSS seabed)")
+        ax.set_title(f"ping {i}, {name}")
+        ax.set_xlabel("slant range (m)")
+        ax.legend(fontsize=8)
+    ax = axs[2]
+    xs = np.linspace(0.01, 6, 300)
+    calm = (y > 0) & (resp < 0.5)
+    seabed = S > 0
+    for name, sel, col in (("seabed", seabed, "C3"), ("water column", ~seabed, "C0")):
+        ax.hist((y / I_bar)[calm & sel], bins=np.linspace(0, 6, 121), density=True, histtype="step", color=col,
+                label=rf"$y / \bar I$, {name} (non-spike)")
+    ax.plot(xs, gamma_dist.pdf(xs, L_SHAPE, scale=1 / L_SHAPE), "k", lw=1, label=f"Gam($L$ = {L_SHAPE:.2f})")
+    ax.plot(xs, gamma_dist.pdf(xs, 1, scale=1), "k--", lw=1, label="Gam(1) (Rayleigh speckle)")
+    ax.set_title("normalised intensity")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(args.out, dpi=130)
+    print(f"wrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()
