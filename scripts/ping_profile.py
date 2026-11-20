@@ -20,8 +20,6 @@ starboard intensities, interpolated navigation and the 3DSS bathymetry per ping)
    :math:`y / \bar I` over the non-spike bins of the fitted pings against
    :math:`\mathrm{Gam}(L, 1/L)`.
 """
-from __future__ import annotations
-
 import argparse
 import math
 from pathlib import Path

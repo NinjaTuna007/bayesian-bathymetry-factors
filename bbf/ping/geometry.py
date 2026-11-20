@@ -11,8 +11,6 @@ rotations `R_MOUNT`. The beam angle of a ray :math:`e` is
 :math:`\beta_c = \operatorname{atan2}(u_\mathrm{dwn}^\top e,\, u_\mathrm{out}^\top e)`, as in the
 paper with :math:`\pm u_\mathrm{stb}` folded into :math:`u_\mathrm{out}`.
 """
-from __future__ import annotations
-
 import math
 
 import jax

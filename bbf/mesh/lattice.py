@@ -27,8 +27,6 @@ Coordinates are local: east and north in metres relative to `origin`, so the pla
 stays well conditioned. Depth is positive down from the reference height `z_ref` (world
 up axis), so the seabed point at :math:`q` is :math:`(q_1, q_2, z_\mathrm{ref} - d(q))`.
 """
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 from functools import cached_property

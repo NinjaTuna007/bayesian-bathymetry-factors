@@ -2,8 +2,6 @@ r"""Intrinsic parameters :math:`\theta` of the side-scan sonar, fixed during inf
 
 Side index 0 is port and 1 is starboard throughout; per-side arrays have shape (2,).
 """
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass, field
 from typing import NamedTuple

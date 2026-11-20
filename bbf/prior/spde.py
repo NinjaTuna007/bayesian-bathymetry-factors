@@ -25,8 +25,6 @@ angles of 60°, so
 with :math:`k_i` the number of triangles at vertex :math:`i` and :math:`m_{ij}` the number
 of triangles on edge :math:`ij`.
 """
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 from functools import cached_property

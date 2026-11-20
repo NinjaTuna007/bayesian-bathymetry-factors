@@ -15,8 +15,6 @@ its two nearest bins, :math:`w_b(r) = \max(0, 1 - |r / \Delta r - b|)`, so the b
 smoothly with the depths and range timing carries a gradient. The weights of a sample sum
 to one, so the split conserves :math:`\sum_b S_b \Delta r`.
 """
-from __future__ import annotations
-
 import jax.numpy as jnp
 import numpy as np
 

@@ -24,8 +24,6 @@ step from its stopped-gradient value. At the mode that step has value :math:`\ha
 derivative :math:`-F_{ud} / F_{uu}`, the implicit derivative, so gradients with respect to
 the depths and the pose are exact for the approximation.
 """
-from __future__ import annotations
-
 import math
 
 import jax
