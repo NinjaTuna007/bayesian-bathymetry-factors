@@ -93,3 +93,56 @@ def test_ping_use_combines_labels_and_matched():
     np.testing.assert_array_equal(use[0, :8], [True, False] + [True] * 6)
     assert not use[0, 8:16].any() and use[0, 16:24].all() and not use[:, 24:].any()
     assert not use[1, :8].any() and use[1, 8:24].all()
+
+
+def test_lit_probability_default_equals_spike_formula():
+    """Without a measured rate, p = eps_B + (1 - eps_B) D(m), the earlier form."""
+    from jax.scipy.special import gammainc
+    th = make_theta()
+    S = jnp.asarray(np.linspace(0, 5e-7, 80))
+    p = np.asarray(Sh.lit_probability(S, 0.0, th, STARBOARD))
+    k = th.block * th.L
+    m = 1 + np.asarray(S).reshape(-1, th.block).mean(axis=1) / th.at(STARBOARD).noise
+    eps_b = 1 - (1 - th.at(STARBOARD).eps) ** th.block
+    D = 1 - np.asarray(gammainc(k, k * Sh.threshold(th) / m))
+    np.testing.assert_allclose(p, eps_b + (1 - eps_b) * D, rtol=1e-12)
+
+
+def test_lit_probability_with_measured_rate():
+    import dataclasses
+    th = dataclasses.replace(make_theta(), wc_lit=np.stack([np.linspace(0.5, 0.0, 10), np.full(10, 0.03)]))
+    dark = np.asarray(Sh.lit_probability(jnp.zeros(80), 0.0, th, 0))
+    np.testing.assert_allclose(dark, np.linspace(0.5, 0.0, 10), atol=1e-12)
+    bright = np.asarray(Sh.lit_probability(jnp.full(80, 1e-3), 0.0, th, 1))
+    assert bright.min() > 0.999
+    # beyond the measured range the last rate continues
+    assert np.asarray(Sh.lit_probability(jnp.zeros(120), 0.0, th, 1))[-1] == pytest.approx(0.03)
+
+
+def test_water_column_lit_rate_recovers_profile():
+    rng = np.random.default_rng(6)
+    n, nb, bdr = 400, 100, 0.4
+    rb = (np.arange(nb) + 0.5) * bdr
+    true = np.where(rb < 4, 0.6, 0.02)  # ringing near the sonar, quiet water beyond
+    r0 = np.stack([rng.uniform(15, 25, n), rng.uniform(15, 25, n)], axis=1)
+    lab = rng.random((n, 2, nb)) < true
+    lab |= rb[None, None, :] >= r0[..., None]  # seabed beyond the first echo is lit
+    rate = Sh.water_column_lit_rate([lab], [r0], bdr, onset=1.0, smooth=0.4)
+    assert rate.shape == (2, nb)
+    np.testing.assert_allclose(rate[:, (rb > 0.5) & (rb < 3.5)], 0.6, atol=0.06)
+    np.testing.assert_allclose(rate[:, (rb > 6) & (rb < 12)], 0.02, atol=0.02)
+    np.testing.assert_allclose(rate[:, rb > 30], 0.02, atol=0.02)  # beyond any water column: the quiet level
+    valid = Sh.onset_valid(r0, nb, bdr, onset=1.0)
+    t = 0
+    zone = (rb >= r0[t, 0] - 1.0) & (rb < r0[t, 0])
+    assert not valid[t, 0, zone].any() and valid[t, 0, ~zone].all()
+
+
+def test_seabed_above_the_waterline_returns_nothing():
+    import dataclasses
+    m = M.build(-30.0, 30.0, -10.0, 10.0, h=1.0, origin=(0.0, 0.0))
+    d = jnp.full(m.n_vertices, DEPTH)  # seabed at z = -20 (z_ref 0)
+    th = make_theta()
+    wet = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, th, U, N_BINS, DR))
+    dry = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, dataclasses.replace(th, z_water=-25.0), U, N_BINS, DR))
+    assert wet.sum() > 0 and dry.sum() == 0

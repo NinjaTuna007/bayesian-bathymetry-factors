@@ -47,6 +47,7 @@ class Problem:
     dr: float
     pairs: dict[tuple[int, int], Pairs] = field(default_factory=dict)
     chunk: int = 32
+    valid: list[np.ndarray] | None = None  # per pass (n, 2, n_blocks): blocks to use (see onset_valid)
 
     @property
     def n_bins(self) -> int:
@@ -62,7 +63,9 @@ class Problem:
                     matched |= matched_mask(pr, len(y), self.n_bins, "a")
                 if b == p:
                     matched |= matched_mask(pr, len(y), self.n_bins, "b")
-            out.append(np.stack([ping_use(lab[t], self.n_bins, self.theta.block, matched[t]) for t in range(len(y))]))
+            val = None if self.valid is None else self.valid[p]
+            out.append(np.stack([ping_use(lab[t], self.n_bins, self.theta.block, matched[t],
+                                          None if val is None else val[t]) for t in range(len(y))]))
         return out
 
 
@@ -113,21 +116,22 @@ def data_term(problem: Problem):
     uses = [jnp.asarray(u) for u in pb.uses()]
     ys = [jnp.asarray(y) for y in pb.y]
     labels = [jnp.asarray(lab) for lab in pb.labels]
+    valids = [jnp.ones(lab.shape, bool) for lab in labels] if pb.valid is None else [jnp.asarray(v) for v in pb.valid]
     keys = sorted(pb.pairs)
 
-    def side_terms(side, y, S, use, lab):
+    def side_terms(side, y, S, use, lab, val):
         Fu, _, _ = _objective(th, side, dr, y, S, use)
         u_hat, H = mode(th, side, dr, y, S, use)
         ping = Fu(u_hat) + 0.5 * jnp.log(2 * jnp.pi) - 0.5 * jnp.log(H)
-        return ping + log_shadow_side(th, side, lab, S, u_hat), u_hat
+        return ping + log_shadow_side(th, side, lab, S, u_hat, val), u_hat
 
     def F(S_list):
         total, u_hats = 0.0, []
-        for y, S, use, lab in zip(ys, S_list, uses, labels):
+        for y, S, use, lab, val in zip(ys, S_list, uses, labels, valids):
             us = []
             for side in (0, 1):
-                v, uh = jax.vmap(lambda yy, SS, uu, ll, side=side: side_terms(side, yy, SS, uu, ll))(
-                    y[:, side], S[:, side], use[:, side], lab[:, side])
+                v, uh = jax.vmap(lambda yy, SS, uu, ll, vv, side=side: side_terms(side, yy, SS, uu, ll, vv))(
+                    y[:, side], S[:, side], use[:, side], lab[:, side], val[:, side])
                 total = total + v.sum()
                 us.append(uh)
             u_hats.append(jnp.stack(us, axis=1))

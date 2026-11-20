@@ -30,7 +30,7 @@ from scipy.special import gammainc, gammaln
 from bbf.inference.objective import Problem
 from bbf.match.factor import E_MAX, log_ratio_pdf
 from bbf.ping.factor import DB_TO_LOG_I, bin_ranges
-from bbf.ping.shadow import threshold
+from bbf.ping.shadow import noise_lit_rate, threshold
 
 
 def layout(problem: Problem) -> dict:
@@ -85,8 +85,9 @@ def shadow_rows(problem: Problem, S, u_hat):
     B = th.block
     k = B * th.L
     T = threshold(th)
+    fa = th.label_fa
     out = []
-    for Sp, up in zip(S, u_hat):
+    for p_i, (Sp, up) in enumerate(zip(S, u_hat)):
         coef = np.zeros_like(Sp)
         nb = Sp.shape[-1] // B
         for side in (0, 1):
@@ -95,11 +96,14 @@ def shadow_rows(problem: Problem, S, u_hat):
             Sbar = Sp[:, side, : nb * B].reshape(len(Sp), nb, B).mean(axis=2)
             m = 1.0 + kap * Sbar / st.noise
             x = k * T / m
-            eps_b = 1.0 - (1.0 - st.eps) ** B
-            p = np.clip(eps_b + (1 - eps_b) * (1 - gammainc(k, x)), 1e-12, 1 - 1e-12)
-            dP_dx = np.exp((k - 1) * np.log(x) - x - gammaln(k))
-            dp_dm = (1 - eps_b) * dP_dx * k * T / m**2
+            D = 1.0 - gammainc(k, x)
+            p0 = noise_lit_rate(th, side, nb)[None, :]
+            p = np.clip(p0 + (1 - p0) * (D - fa) / (1 - fa), 1e-12, 1 - 1e-12)
+            dD_dm = np.exp((k - 1) * np.log(x) - x - gammaln(k)) * k * T / m**2
+            dp_dm = (1 - p0) / (1 - fa) * dD_dm
             g = np.sqrt(1.0 / (p * (1 - p))) * dp_dm * kap / (st.noise * B)  # per block, per bin of the block
+            if problem.valid is not None:
+                g = g * problem.valid[p_i][:, side, :nb]
             coef[:, side, : nb * B] = np.repeat(g, B, axis=1)
         out.append(coef)
     return out

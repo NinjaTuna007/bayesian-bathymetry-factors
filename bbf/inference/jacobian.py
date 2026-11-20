@@ -69,6 +69,7 @@ def ping_side_jacobian(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins
     has = idx >= 0
     at = np.asarray(G._running_max(jnp.asarray(alpha))[1])
     j = at[np.maximum(idx, 0)]
+    inside = inside & (Pn[:, 2] <= theta.z_water)  # seabed above the water surface returns nothing
     verts = mesh.triangles[tri]
     v6 = np.concatenate([verts, verts[j]], axis=1)
     dn = np.asarray(d)

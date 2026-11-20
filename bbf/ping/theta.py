@@ -50,8 +50,13 @@ class Theta:
     Shadows: acoustic wavelength :math:`\lambda` (`wavelength`, m; 1480 m/s at 450 kHz) for
     the knife-edge diffraction and the self-shadow margin (`shadow_margin`, m) of
     `geometry.horizon_visibility`; lit/shadow labels are taken over
-    blocks of `block` bins, and a noise-only block is labelled lit with probability
-    `label_fa`.
+    blocks of `block` bins, and a block of pure noise is labelled lit with probability
+    `label_fa`. `wc_lit` (2, n_blocks), if given, is the measured lit rate of blocks with no
+    seabed echo by range (ringing, volume scatter, spikes), from
+    `bbf.ping.shadow.water_column_lit_rate`; otherwise that rate is
+    :math:`\epsilon_B + (1 - \epsilon_B) p_\mathrm{fa}` with :math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`.
+
+    `z_water` is the world height of the water surface: seabed above it returns no echo.
     """
     noise: npt.ArrayLike
     L: float
@@ -69,11 +74,15 @@ class Theta:
     shadow_margin: float = 0.5
     block: int = 8
     label_fa: float = 0.01
+    wc_lit: npt.ArrayLike | None = None
+    z_water: float = math.inf
 
     def __post_init__(self):
         for name in ("noise", "eps", "eta", "zeta", "ell", "log_kappa_mean", "log_kappa_std"):
             object.__setattr__(self, name, _pair(getattr(self, name)))
         object.__setattr__(self, "gain_db", np.asarray(self.gain_db, dtype=float).reshape(2, 3))
+        if self.wc_lit is not None:
+            object.__setattr__(self, "wc_lit", np.asarray(self.wc_lit, dtype=float).reshape(2, -1))
 
     def at(self, side: int) -> SideTheta:
         """Per-side parameters of `side` (0 port, 1 starboard)."""

@@ -58,7 +58,8 @@ def unit_intensity(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: in
     P, n, inside = G.samples(mesh, d, pose, side, u)
     a, r = G.echo(theta, pose, side, P, n)
     V = G.horizon_visibility(P, G.pose_frame(pose)[0], u, theta.shadow_margin, theta.wavelength)
-    w = jnp.where(inside, a * V * curve_length(P[:, :2]), 0.0) / dr
+    wet = inside & (P[:, 2] <= theta.z_water)  # seabed above the water surface returns nothing
+    w = jnp.where(wet, a * V * curve_length(P[:, :2]), 0.0) / dr
     return split_into_bins(r, w, n_bins, dr)
 
 

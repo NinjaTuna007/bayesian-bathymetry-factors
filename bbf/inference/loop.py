@@ -1,6 +1,8 @@
 r"""Outer loop of inference (paper, Alg. 1), with lit/shadow labels in place of the visibility.
 
-Labels depend on the data only and are computed once. Each round, at the current depths:
+Labels depend on the data only and are computed once, together with each ping-side's first
+echo: labels in the echo's onset zone are left out, and the water column before it gives
+the measured lit rate of blocks without a seabed echo. Each round, at the current depths:
 
 1. render every ping; refit the spike parameters and the log-:math:`\kappa` prior
    (`bbf.inference.calibrate`) on every `calib_every`-th ping;
@@ -19,11 +21,12 @@ import numpy as np
 from bbf import mesh as M
 from bbf.inference.calibrate import calibrate
 from bbf.inference.gauss_newton import gauss_newton
+from bbf.inference.init import first_echo
 from bbf.inference.jacobian import ping_side_jacobian
 from bbf.inference.objective import Problem, render
 from bbf.io import Pass
 from bbf.match import draw_overlap, project, select_pairs
-from bbf.ping.shadow import block_labels, ping_use
+from bbf.ping.shadow import block_labels, onset_valid, ping_use, water_column_lit_rate
 from bbf.ping.theta import Theta
 from bbf.prior import Prior
 
@@ -47,7 +50,7 @@ def _pair_key(pairs) -> set:
 
 def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0, u, rounds: int = 3,
           inner: int = 10, n_draws: int = 4000, calib_every: int = 50, chunk: int = 32, seed: int = 0,
-          callback=None, log=print) -> dict:
+          onset: float = 1.5, callback=None, log=print) -> dict:
     """Run the outer loop from (d0, beta0); returns depths, trend, theta, pairs and history.
 
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
@@ -56,19 +59,26 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     ys = [p.y for p in passes]
     dr = passes[0].dr
     labels = [labels_of(p, theta) for p in passes]
+    # first echoes from the data: the echo's onset zone is left out, and the water column
+    # before it gives the lit rate of blocks without a seabed echo, by range
+    r0 = [first_echo(p, theta) for p in passes]
+    block_dr = theta.block * dr
+    valid = [onset_valid(r, lab.shape[-1], block_dr, onset) for r, lab in zip(r0, labels)]
+    theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
     d, beta = np.asarray(d0, dtype=float), np.asarray(beta0, dtype=float)
     history, prev_pairs, pairs = [], None, {}
     problem = None
     for rnd in range(rounds):
         t0 = time.time()
-        base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk)
+        base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk,
+                       valid=valid)
         S = render(base, d)
         # 1. theta at the current depths, on a subset of pings
         sub = [np.arange(0, len(p), calib_every) for p in poses]
         y_c = np.concatenate([y[s] for y, s in zip(ys, sub)])
         S_c = np.concatenate([Sp[s] for Sp, s in zip(S, sub)])
-        use_c = np.concatenate([np.stack([ping_use(lab[t], ys[0].shape[-1], theta.block) for t in s])
-                                for lab, s in zip(labels, sub)])
+        use_c = np.concatenate([np.stack([ping_use(lab[t], ys[0].shape[-1], theta.block, valid=val[t]) for t in s])
+                                for lab, val, s in zip(labels, valid, sub)])
         theta, fit = calibrate(y_c, S_c, use_c, theta, dr)
         log(f"round {rnd}: theta fit (converged {fit['converged']}): eta {np.asarray(theta.eta)}, "
             f"zeta {np.asarray(theta.zeta)}, ell {np.asarray(theta.ell)}, "

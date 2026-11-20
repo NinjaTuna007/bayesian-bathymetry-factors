@@ -12,18 +12,21 @@ so a noise-only block is labelled lit with probability :math:`p_\mathrm{fa}` (`T
 Labels come from the data and are held fixed, like the matched pairs.
 
 The predicted mean of that statistic is :math:`m_j = 1 + \kappa \bar S_j / N_c`, with
-:math:`\bar S_j` the block mean of the unit intensity (shadows included through the soft
-visibility). Moment-matching the block mean by :math:`\mathrm{Gam}(BL, \text{mean } m_j)` and
-allowing a spike in the block with probability :math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`,
+:math:`\bar S_j` the block mean of the unit intensity (shadows included through the
+visibility). Moment-matching the block mean by :math:`\mathrm{Gam}(BL, \text{mean } m_j)`, the
+block passes the threshold with probability :math:`D(m_j) = 1 - P(BL, BL\,T/m_j)`, with :math:`P` the
+regularised lower incomplete gamma function. Blocks without a seabed echo are still lit at a
+rate :math:`p_0` from ringing, volume scatter and spikes, so (`lit_probability`)
 
 .. math::
 
-    p(\ell_j = \text{lit} \mid d) = \epsilon_B + (1 - \epsilon_B)
-        \Bigl(1 - P\bigl(BL,\; BL\, T / m_j\bigr)\Bigr),
+    p(\ell_j = \text{lit} \mid d) = p_0 + (1 - p_0) \frac{D(m_j) - p_\mathrm{fa}}{1 - p_\mathrm{fa}}.
 
-with :math:`P` the regularised lower incomplete gamma function. Shadow and water column give
-:math:`m_j = 1`, so the lit probability falls to the false-alarm level; weak echoes at far
-range have :math:`m_j` near one too, so a dark block there is little evidence of shadow.
+:math:`p_0` is best measured from the water column by range (`water_column_lit_rate`); by
+default it is :math:`\epsilon_B + (1 - \epsilon_B) p_\mathrm{fa}` with
+:math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`. Weak echoes at far range have :math:`m_j` near one,
+so a dark block there is little evidence of shadow. Labels in the echo's gradual onset just
+before each first echo are left out (`onset_valid`).
 """
 import jax
 import jax.numpy as jnp
@@ -64,24 +67,96 @@ def block_mask(labels, n_bins: int, block: int):
     return jnp.concatenate([out, jnp.zeros(n_bins - out.shape[0], dtype=bool)])
 
 
+def noise_lit_rate(theta: Theta, side: int, n_blocks: int) -> np.ndarray:
+    r"""Lit rate :math:`p_0` (n_blocks,) of blocks without a seabed echo: measured by range or from the spike rate."""
+    if theta.wc_lit is None:
+        st = theta.at(side)
+        eps_block = 1.0 - (1.0 - st.eps) ** theta.block
+        return np.full(n_blocks, eps_block + (1.0 - eps_block) * theta.label_fa)
+    rate = np.asarray(theta.wc_lit)[side]
+    if len(rate) < n_blocks:
+        rate = np.concatenate([rate, np.full(n_blocks - len(rate), rate[-1])])
+    return rate[:n_blocks]
+
+
 def lit_probability(S, log_kappa, theta: Theta, side: int):
-    r"""Predicted :math:`p(\ell_j = \text{lit} \mid d)` (n_blocks,) from the unit intensity S (n_bins,)."""
-    st = theta.at(side)
+    r"""Predicted :math:`p(\ell_j = \text{lit} \mid d)` (n_blocks,) from the unit intensity S (n_bins,).
+
+    With :math:`D(m) = 1 - P(BL, BL\,T/m)` the chance that a block of mean ratio :math:`m` passes the
+    threshold (:math:`D(1) = p_\mathrm{fa}`) and :math:`p_0` the lit rate without a seabed echo,
+
+    .. math::
+
+        p = p_0 + (1 - p_0) \frac{D(m) - p_\mathrm{fa}}{1 - p_\mathrm{fa}},
+
+    which is :math:`p_0` where the seabed predicts nothing and tends to 1 for a strong echo.
+    """
     k = theta.block * theta.L
-    m = 1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / st.noise
-    eps_block = 1.0 - (1.0 - st.eps) ** theta.block
-    return eps_block + (1.0 - eps_block) * (1.0 - gammainc(k, k * threshold(theta) / m))
+    m = 1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / theta.at(side).noise
+    D = 1.0 - gammainc(k, k * threshold(theta) / m)
+    p0 = jnp.asarray(noise_lit_rate(theta, side, m.shape[-1]))
+    fa = theta.label_fa
+    return p0 + (1.0 - p0) * (D - fa) / (1.0 - fa)
 
 
-def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa):
-    r""":math:`\sum_j \log p(\ell_j \mid d)` for one side; `log_kappa` is held fixed."""
+def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None):
+    r""":math:`\sum_j \log p(\ell_j \mid d)` over the valid blocks of one side; `log_kappa` is held fixed."""
     p = lit_probability(S, jax.lax.stop_gradient(log_kappa), theta, side)
     p = jnp.clip(p, 1e-12, 1.0 - 1e-12)
     labels = jnp.asarray(labels, dtype=bool)
-    return jnp.sum(jnp.where(labels, jnp.log(p), jnp.log1p(-p)))
+    lp = jnp.where(labels, jnp.log(p), jnp.log1p(-p))
+    return jnp.sum(lp if valid is None else jnp.where(jnp.asarray(valid, dtype=bool), lp, 0.0))
 
 
-def log_shadow_factor(mesh: M.Mesh, d, pose, labels, theta: Theta, u, dr: float, n_bins: int, log_kappa):
+def onset_valid(r0, n_blocks: int, block_dr: float, onset: float = 1.5) -> np.ndarray:
+    """Blocks (n, 2, n_blocks) to use: all but those within `onset` m before each ping-side's first echo r0 (n, 2).
+
+    The echo starts gradually (beam width, off-plane seabed, near-bottom scatter), so labels
+    there say little about where the seabed is; NaN r0 leaves every block valid.
+    """
+    rb = (np.arange(n_blocks) + 0.5) * block_dr
+    r0 = np.asarray(r0, dtype=float)[..., None]
+    return ~((rb >= r0 - onset) & (rb < r0))
+
+
+def water_column_lit_rate(labels: list, r0: list, block_dr: float, onset: float = 1.5, smooth: float = 1.0,
+                          floor: float = 0.0) -> np.ndarray:
+    """Measured lit rate (2, n_blocks) of blocks without a seabed echo, by range.
+
+    Uses the water column of every ping-side: blocks ending more than `onset` m before its
+    first echo r0. The rate is smoothed over `smooth` m; beyond the deepest water column
+    observed, it continues at the median rate of the outer half of the observed range.
+    labels: per pass (n, 2, n_blocks); r0: per pass (n, 2).
+    """
+    n_blocks = labels[0].shape[-1]
+    rb = (np.arange(n_blocks) + 0.5) * block_dr
+    out = np.zeros((2, n_blocks))
+    w = max(round(smooth / block_dr), 1)
+    for c in (0, 1):
+        lit = np.zeros(n_blocks)
+        cnt = np.zeros(n_blocks)
+        for lab, r in zip(labels, r0):
+            wc = rb[None, :] < (np.asarray(r)[:, c][:, None] - onset)
+            lit += (lab[:, c] & wc).sum(axis=0)
+            cnt += wc.sum(axis=0)
+        k = np.convolve(lit, np.ones(w), "same")
+        n = np.convolve(cnt, np.ones(w), "same")
+        seen = n >= 20
+        rate = np.where(seen, k / np.maximum(n, 1), np.nan)
+        idx = np.flatnonzero(seen)
+        if len(idx) == 0:
+            out[c] = floor
+            continue
+        far = rate[idx[len(idx) // 2]:idx[-1] + 1]
+        fill = float(np.nanmedian(far))
+        rate[idx[-1] + 1:] = fill
+        rate[: idx[0]] = rate[idx[0]]
+        out[c] = np.clip(np.nan_to_num(rate, nan=fill), floor, 0.95)
+    return out
+
+
+def log_shadow_factor(mesh: M.Mesh, d, pose, labels, theta: Theta, u, dr: float, n_bins: int, log_kappa,
+                      valid=None):
     r"""Log shadow factor :math:`\sum_c \sum_j \log p(\ell_{c,j} \mid d)` of one ping.
 
     labels: (2, n_blocks) from `block_labels`; log_kappa: (2,) reflectivity per side, e.g.
@@ -90,16 +165,21 @@ def log_shadow_factor(mesh: M.Mesh, d, pose, labels, theta: Theta, u, dr: float,
     total = 0.0
     for side in (0, 1):
         S = Rn.unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr)
-        total = total + log_shadow_side(theta, side, labels[side], S, log_kappa[side])
+        total = total + log_shadow_side(theta, side, labels[side], S, log_kappa[side],
+                                        None if valid is None else valid[side])
     return total
 
 
-def ping_use(labels, n_bins: int, block: int, matched=None):
+def ping_use(labels, n_bins: int, block: int, matched=None, valid=None):
     """Bins (2, n_bins) the ping factor scores: those in lit blocks, minus matched bins.
 
     labels: (2, n_blocks) from `block_labels`; matched: (2, n_bins) bins taken by the match
-    factor (default none). Shadow blocks are scored by the shadow factor instead, and
-    matched bins by the match factor, so each intensity enters one likelihood term.
+    factor (default none); valid: (2, n_blocks) blocks to use at all (see `onset_valid`).
+    Shadow blocks are scored by the shadow factor instead, and matched bins by the match
+    factor, so each intensity enters one likelihood term.
     """
-    use = np.stack([np.asarray(block_mask(labels[c], n_bins, block)) for c in (0, 1)])
+    lit = np.asarray(labels, dtype=bool)
+    if valid is not None:
+        lit = lit & np.asarray(valid, dtype=bool)
+    use = np.stack([np.asarray(block_mask(lit[c], n_bins, block)) for c in (0, 1)])
     return use if matched is None else use & ~np.asarray(matched, dtype=bool)

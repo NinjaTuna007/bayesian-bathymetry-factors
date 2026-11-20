@@ -31,8 +31,11 @@ from .shadow import (
     lit_probability,
     log_shadow_factor,
     log_shadow_side,
+    noise_lit_rate,
+    onset_valid,
     ping_use,
     threshold,
+    water_column_lit_rate,
 )
 from .theta import PORT, STARBOARD, SideTheta, Theta
 
@@ -59,6 +62,8 @@ __all__ = [
     "log_shadow_factor",
     "log_shadow_side",
     "mode",
+    "noise_lit_rate",
+    "onset_valid",
     "ping_use",
     "pose_frame",
     "predicted",
@@ -69,4 +74,5 @@ __all__ = [
     "u_grid",
     "unit_intensities",
     "unit_intensity",
+    "water_column_lit_rate",
 ]
