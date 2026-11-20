@@ -144,3 +144,12 @@ def test_gradients_across_triangle_edges(m):
         g_mid = np.asarray(grad_q(jnp.asarray(mid[None]))[0])
         assert np.isfinite(g_mid).all()
         assert min(np.abs(g_mid - fg[t1]).max(), np.abs(g_mid - fg[t2]).max()) < 1e-9
+
+
+def test_seabed_point_uses_z_ref():
+    m = M.build(0.0, 10.0, 0.0, 10.0, h=1.0, z_ref=55.0)
+    d = plane(m.vertices)
+    q = np.array([[0.3, -1.2], [2.0, 1.0]])
+    P = np.asarray(M.seabed_point(m, d, q))
+    np.testing.assert_allclose(P[:, :2], q)
+    np.testing.assert_allclose(P[:, 2], 55.0 - plane(q), atol=1e-9)

@@ -24,7 +24,8 @@ triangle exists if its three vertices do, which gives the zigzag left and right 
 the domain.
 
 Coordinates are local: east and north in metres relative to `origin`, so the planar trend
-stays well conditioned. Depth is positive down, as in the paper.
+stays well conditioned. Depth is positive down from the reference height `z_ref` (world
+up axis), so the seabed point at :math:`q` is :math:`(q_1, q_2, z_\mathrm{ref} - d(q))`.
 """
 from __future__ import annotations
 
@@ -46,6 +47,7 @@ class Mesh:
     n_rows: int
     n_cols: int
     origin: tuple[float, float] = (0.0, 0.0)  # world (E, N) of local (0, 0)
+    z_ref: float = 0.0  # world height that depths are measured down from
 
     @property
     def n_vertices(self) -> int:
@@ -94,10 +96,11 @@ class Mesh:
 
 
 def build(xmin: float, xmax: float, ymin: float, ymax: float, h: float, buffer: float = 0.0,
-          origin: tuple[float, float] | None = None) -> Mesh:
+          origin: tuple[float, float] | None = None, z_ref: float = 0.0) -> Mesh:
     """Lattice whose triangles cover the world box (xmin, xmax, ymin, ymax) grown by `buffer`.
 
     origin defaults to the centre of the box; all mesh coordinates are relative to it.
+    z_ref is the world height depths are measured down from, e.g. the water surface.
     """
     if h <= 0 or buffer < 0:
         raise ValueError("need h > 0 and buffer >= 0")
@@ -111,7 +114,7 @@ def build(xmin: float, xmax: float, ymin: float, ymax: float, h: float, buffer: 
     n_cols = math.ceil((right - x0) / h) + 1
     n_rows = math.ceil((top - bottom) / (ROW * h)) + 1
     return Mesh(h=float(h), x0=x0, y0=bottom, n_rows=n_rows, n_cols=n_cols,
-                origin=(float(origin[0]), float(origin[1])))
+                origin=(float(origin[0]), float(origin[1])), z_ref=float(z_ref))
 
 
 def locate(mesh: Mesh, q):
@@ -153,6 +156,12 @@ def interpolate(mesh: Mesh, d, q):
     return jnp.where(inside, jnp.sum(dv * bary, axis=-1), jnp.nan)
 
 
+def seabed_point(mesh: Mesh, d, q):
+    r"""Seabed point :math:`P(q) = (q_1, q_2, z_\mathrm{ref} - d(q))` (..., 3), local x, y and world z; NaN off the mesh."""
+    q = jnp.asarray(q)
+    return jnp.concatenate([q, (mesh.z_ref - interpolate(mesh, d, q))[..., None]], axis=-1)
+
+
 def face_gradient(mesh: Mesh, d):
     r"""(m, 2) gradient :math:`\nabla d` of the depth on each triangle (constant per face)."""
     dv = jnp.asarray(d)[jnp.asarray(mesh.triangles)]
@@ -161,7 +170,7 @@ def face_gradient(mesh: Mesh, d):
 
 
 def normal(mesh: Mesh, d, q):
-    r"""Upward unit normal (..., 3) of the seabed :math:`z = -d(q)` at local points q; NaN off the mesh.
+    r"""Upward unit normal (..., 3) of the seabed :math:`z = z_\mathrm{ref} - d(q)` at local points q; NaN off the mesh.
 
     .. math::
 
