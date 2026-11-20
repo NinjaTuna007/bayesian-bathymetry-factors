@@ -52,3 +52,19 @@ def test_depths_roundtrip(tmp_path):
     assert m2 == m
     np.testing.assert_array_equal(d2, d)
     np.testing.assert_array_equal(extra["beta"], [1.0, 2.0, 3.0])
+
+
+def test_retime_uses_regular_stamps():
+    """Bursty record times: poses sampled at them are moved to the times the stamps imply."""
+    from bbf.io import retime
+    rng = np.random.default_rng(1)
+    n = 200
+    stamp = (np.arange(n) * 82_500_000 + 5_000_000_000).astype(np.int64)  # 82.5 ms per ping
+    t_true = 3.0 + 0.5 * (stamp - stamp[0]) * 1e-9  # replayed at twice the speed
+    t = np.sort(t_true + rng.normal(0, 0.2, n))  # bursty record times
+    track = np.column_stack([1.8 * t, 0.1 * t, np.full(n, 56.0), 0.01 * np.sin(t), np.zeros(n), np.full(n, 3.1)])
+    t_new, poses = retime(t, stamp, track)
+    np.testing.assert_allclose(t_new, t_true, atol=0.05)  # the least-squares line, not the jitter
+    np.testing.assert_allclose(poses[:, 0], 1.8 * t_new, atol=1e-9)  # the navigation at the new times
+    assert np.all(np.diff(t_new) > 0)
+    assert np.abs(poses[:, 5]).max() <= np.pi  # yaw near the wrap stays wrapped

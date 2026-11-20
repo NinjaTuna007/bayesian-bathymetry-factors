@@ -4,7 +4,9 @@ The cache (``<bag>_patches.npz``) holds one or more named time windows (patches)
 each a set of per-ping arrays keyed ``<name>/<field>``: raw ``port`` and ``starboard``
 amplitudes (n, B), bin 0 nearest the sonar; navigation ``x``, ``y`` (east and north of a
 local origin), ``alt`` (height), ``roll``, ``pitch``, ``yaw`` (NED/FRD, yaw clockwise
-from north) shifted onto ping time; ping times ``t``; and the bin spacing ``range_res``.
+from north) interpolated at ``t``, the bag's record time of each ping; the sonar's header
+stamps ``stamp_ns``; and the bin spacing ``range_res``. Record times are bursty, so the
+pings are retimed by their stamps (`retime`).
 The cache also holds the 3DSS bathymetry (``bathy_*``); `Pass` leaves it out, so inference
 cannot use it (diagnostic scripts read it themselves, `scripts/seabed_3dss.py`).
 """
@@ -42,12 +44,41 @@ class Pass:
         return out
 
 
-def load_patch(path, name: str) -> Pass:
-    """Read patch `name` of a patch cache as a `Pass`."""
+def retime(t, stamp_ns, poses) -> tuple[np.ndarray, np.ndarray]:
+    r"""Ping times from the sonar's own stamps, and the poses re-interpolated at them.
+
+    The cache's times ``t`` are the bag's record times, which reach the recorder in bursts
+    (jitter of tenths of a second here) and, in a replayed bag, run at the replay rate. The
+    sonar's header stamps are regular. They are mapped onto the record clock (which the
+    navigation shares) by a least-squares line :math:`t \approx a + b\, s`, keeping the average
+    alignment the cache's navigation offset was fitted to, and the poses, which are the
+    navigation sampled at ``t``, are interpolated at the mapped times (yaw unwrapped).
+    """
+    t = np.asarray(t, dtype=float)
+    s = (np.asarray(stamp_ns, dtype=np.int64) - int(stamp_ns[0])) * 1e-9
+    b, a = np.polyfit(s, t, 1)
+    t_new = a + b * s
+    order = np.argsort(t, kind="stable")
+    tt, pp = t[order], np.asarray(poses, dtype=float)[order].copy()
+    pp[:, 5] = np.unwrap(pp[:, 5])
+    new = np.column_stack([np.interp(t_new, tt, pp[:, k]) for k in range(pp.shape[1])])
+    new[:, 5] = (new[:, 5] + np.pi) % (2 * np.pi) - np.pi
+    return t_new, new
+
+
+def load_patch(path, name: str, use_stamps: bool = True) -> Pass:
+    """Read patch `name` of a patch cache as a `Pass`.
+
+    use_stamps: time the pings by the sonar's header stamps (`retime`) where the cache has
+    them, instead of the bag's record times.
+    """
     z = np.load(path)
     f = {k.split("/", 1)[1]: z[k] for k in z.files if k.startswith(f"{name}/")}
     if not f:
         raise KeyError(f"no patch {name!r} in {path}")
     poses = np.column_stack([f["x"], f["y"], f["alt"], f["roll"], f["pitch"], f["yaw"]]).astype(float)
+    t = f["t"].astype(float)
+    if use_stamps and "stamp_ns" in f:
+        t, poses = retime(t, f["stamp_ns"], poses)
     y = np.stack([f["port"], f["starboard"]], axis=1).astype(float) ** 2
-    return Pass(name=name, poses=poses, y=y, dr=float(f["range_res"]), t=f["t"].astype(float))
+    return Pass(name=name, poses=poses, y=y, dr=float(f["range_res"]), t=t)
