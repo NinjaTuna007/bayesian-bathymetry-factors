@@ -16,12 +16,9 @@ starboard intensities, interpolated navigation and the 3DSS bathymetry per ping)
    and side, at the fixed seabed; the prior on :math:`\log\kappa` is set from
    those fits.
 3. Figure: measured and predicted intensity along range for both sides of one ping, with
-   :math:`\bar I` at the Laplace mode of :math:`\log\kappa`, and the distribution of
-   :math:`y / \bar I` over the non-spike bins of the fitted pings against
-   :math:`\mathrm{Gam}(L, 1/L)`.
+   :math:`\bar I` at the Laplace mode of :math:`\log\kappa`.
 """
 import argparse
-import math
 from pathlib import Path
 
 import jax
@@ -31,7 +28,6 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.optimize import minimize
-from scipy.stats import gamma as gamma_dist
 
 from bbf import mesh as M
 from bbf import ping as P
@@ -176,43 +172,25 @@ def main():
           f"eta {theta.eta}, zeta {theta.zeta}, ell {theta.ell} m, "
           f"log kappa {theta.log_kappa_mean} ± {theta.log_kappa_std}")
 
-    # predicted means at the Laplace mode, and spike responsibilities
-    I_bar, I_sp, resp = np.zeros_like(y), np.zeros_like(y), np.zeros_like(y)
-    for k in range(len(idx)):
-        for c in (0, 1):
-            u_hat, _ = P.mode(theta, c, dr, jnp.asarray(y[k, c]), jnp.asarray(S[k, c]), jnp.ones(n_bins, bool))
-            a, b = (np.asarray(v) for v in P.predicted(jnp.asarray(S[k, c]), u_hat, theta, c, dr))
-            I_bar[k, c], I_sp[k, c] = a, b
-            ys = np.where(y[k, c] > 0, y[k, c], 1.0)
-            lm = math.log1p(-EPS[c]) + np.asarray(P.log_gamma(ys, L_SHAPE, a))
-            ls = math.log(EPS[c]) + np.asarray(P.log_gamma(ys, 1.0, b))
-            resp[k, c] = np.exp(ls - np.logaddexp(lm, ls))
-
+    # predicted and spike means of the plotted ping at the Laplace mode
     k = int(np.flatnonzero(idx == args.ping)[0])
     i = idx[k]
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    I_bar, I_sp = np.zeros((2, n_bins)), np.zeros((2, n_bins))
+    for c in (0, 1):
+        u_hat, _ = P.mode(theta, c, dr, jnp.asarray(y[k, c]), jnp.asarray(S[k, c]), jnp.ones(n_bins, bool))
+        I_bar[c], I_sp[c] = (np.asarray(v) for v in P.predicted(jnp.asarray(S[k, c]), u_hat, theta, c, dr))
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
     for c, name in ((P.PORT, "port"), (P.STARBOARD, "starboard")):
         ax = axs[c]
         ax.semilogy(r_bin, np.maximum(y[k, c], 1), lw=0.3, color="0.6", label="measured $y$")
-        ax.semilogy(r_bin, I_bar[k, c], color="C3", lw=1.2, label=r"predicted $\bar I = g(\hat\kappa S + N)$")
-        ax.semilogy(r_bin, I_sp[k, c], color="C1", lw=0.8, ls=":", label="spike component mean")
+        ax.semilogy(r_bin, I_bar[c], color="C3", lw=1.2, label=r"predicted $\bar I = g(\hat\kappa S + N)$")
+        ax.semilogy(r_bin, I_sp[c], color="C1", lw=0.8, ls=":", label="spike component mean")
         first = np.flatnonzero(S[k, c] > 0)
         if len(first):
             ax.axvline(r_bin[first[0]], color="C0", ls="--", lw=0.8, label="rendered first return (3DSS seabed)")
         ax.set_title(f"ping {i}, {name}")
         ax.set_xlabel("slant range (m)")
         ax.legend(fontsize=8)
-    ax = axs[2]
-    xs = np.linspace(0.01, 6, 300)
-    calm = (y > 0) & (resp < 0.5)
-    seabed = S > 0
-    for name, sel, col in (("seabed", seabed, "C3"), ("water column", ~seabed, "C0")):
-        ax.hist((y / I_bar)[calm & sel], bins=np.linspace(0, 6, 121), density=True, histtype="step", color=col,
-                label=rf"$y / \bar I$, {name} (non-spike)")
-    ax.plot(xs, gamma_dist.pdf(xs, L_SHAPE, scale=1 / L_SHAPE), "k", lw=1, label=f"Gam($L$ = {L_SHAPE:.2f})")
-    ax.plot(xs, gamma_dist.pdf(xs, 1, scale=1), "k--", lw=1, label="Gam(1) (Rayleigh speckle)")
-    ax.set_title("normalised intensity")
-    ax.legend(fontsize=8)
     fig.tight_layout()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=130)
