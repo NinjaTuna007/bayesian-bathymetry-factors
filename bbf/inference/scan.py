@@ -71,22 +71,26 @@ def plane_unit_intensity(pose, side: int, theta: Theta, D, slope, u, n_bins: int
     return split_into_bins(r, w, n_bins, dr)
 
 
+SCAN_ITERS = 15  # damped Newton iterations of each candidate's log-kappa mode; 8-50 pick the same planes
+
+
 @cache
-def _scorer(theta: Theta, side: int, dr: float, n_bins: int):
+def _scorer(theta: Theta, side: int, dr: float, n_bins: int, iters: int = SCAN_ITERS):
     """Jitted score of many (D, slope) candidates for one ping-side: ping plus shadow factor."""
     def one(pose, y, use, labels, valid, u, D, slope):
         S = plane_unit_intensity(pose, side, theta, D, slope, u, n_bins, dr)
         Fu, _, _ = _objective(theta, side, dr, y, S, use)
-        u_hat, H = mode(theta, side, dr, y, S, use)
+        u_hat, H = mode(theta, side, dr, y, S, use, iters=iters)
         ping = Fu(u_hat) + 0.5 * jnp.log(2 * jnp.pi) - 0.5 * jnp.log(H)
         return ping + log_shadow_side(theta, side, labels, S, u_hat, valid)
     return jax.jit(jax.vmap(one, in_axes=(None, None, None, None, None, None, 0, 0)))
 
 
-def scan_ping_side(pose, side: int, theta: Theta, y, labels, valid, u, n_bins: int, dr: float, r0: float):
+def scan_ping_side(pose, side: int, theta: Theta, y, labels, valid, u, n_bins: int, dr: float, r0: float,
+                   iters: int = SCAN_ITERS):
     r"""Best (D, slope) of one ping-side, coarse to fine; r0 is its first echo (NaN: unknown)."""
     use = ping_use(np.stack([labels, labels]), n_bins, theta.block, valid=np.stack([valid, valid]))[0]
-    f = _scorer(theta, side, dr, n_bins)
+    f = _scorer(theta, side, dr, n_bins, iters)
     args = (jnp.asarray(pose), jnp.asarray(y), jnp.asarray(use), jnp.asarray(labels), jnp.asarray(valid), jnp.asarray(u))
 
     def best(D, sl):

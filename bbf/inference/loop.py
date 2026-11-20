@@ -22,7 +22,7 @@ from bbf import mesh as M
 from bbf.inference.calibrate import calibrate
 from bbf.inference.gauss_newton import gauss_newton
 from bbf.inference.init import first_echo
-from bbf.inference.jacobian import ping_side_jacobian
+from bbf.inference.jacobian import ping_side_jacobians
 from bbf.inference.laplace import laplace
 from bbf.inference.objective import Problem, render
 from bbf.io import Pass
@@ -41,9 +41,13 @@ def labels_of(ps: Pass, theta: Theta) -> np.ndarray:
 
 def jacobians(problem: Problem, d) -> list[list[list]]:
     """Frozen Jacobians J[p][t][c] of every ping-side at depths d."""
-    d = jnp.asarray(d)
-    return [[[ping_side_jacobian(problem.mesh, d, jnp.asarray(pose), c, problem.theta, problem.u, problem.n_bins,
-                                 problem.dr) for c in (0, 1)] for pose in poses] for poses in problem.poses]
+    pb = problem
+    out = []
+    for poses in pb.poses:
+        sides = [ping_side_jacobians(pb.mesh, d, poses, c, pb.theta, pb.u, pb.n_bins, pb.dr, chunk=pb.chunk)
+                 for c in (0, 1)]
+        out.append([[sides[0][t], sides[1][t]] for t in range(len(poses))])
+    return out
 
 
 def observed_vertices(problem: Problem, d) -> np.ndarray:

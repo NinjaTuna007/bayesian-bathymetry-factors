@@ -83,8 +83,12 @@ def _objective(theta: Theta, side: int, dr: float, y, S, use):
     return F, ok, y_safe
 
 
-def mode(theta: Theta, side: int, dr: float, y, S, use):
-    r"""Mode :math:`\hat u` of :math:`F` and the curvature :math:`H = -F''(\hat u)`, differentiable in S."""
+def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS):
+    r"""Mode :math:`\hat u` of :math:`F` and the curvature :math:`H = -F''(\hat u)`, differentiable in S.
+
+    u0: a starting value, e.g. the previous evaluation's mode (default: a moment estimate);
+    iters: damped Newton iterations, which can be few from a warm start.
+    """
     st = theta.at(side)
     F, ok, y_safe = _objective(theta, side, dr, y, S, use)
     dF = jax.grad(F)
@@ -97,15 +101,18 @@ def mode(theta: Theta, side: int, dr: float, y, S, use):
     num = jnp.sum(jnp.where(ok, jnp.maximum(y_safe / g - st.noise, 0.0), 0.0))
     den = jnp.sum(jnp.where(ok, S, 0.0))
     good = (num > 0) & (den > 0)
-    u0 = jnp.where(good, jnp.log(jnp.where(good, num / jnp.where(den > 0, den, 1.0), 1.0)), st.log_kappa_mean)
+    if u0 is None:
+        u0 = jnp.where(good, jnp.log(jnp.where(good, num / jnp.where(den > 0, den, 1.0), 1.0)), st.log_kappa_mean)
 
     def step(_, u):
         h = jnp.maximum(-d2F(u), prior_prec)  # keep the step uphill where F is not concave
         return u + jnp.clip(dF(u) / h, -MAX_STEP, MAX_STEP)
 
-    u_star = jax.lax.stop_gradient(jax.lax.fori_loop(0, NEWTON_ITERS, step, jax.lax.stop_gradient(u0)))
+    u_star = jax.lax.stop_gradient(jax.lax.fori_loop(0, iters, step, jax.lax.stop_gradient(u0)))
     H_star = jnp.maximum(-d2F(u_star), 1e-12)
-    u_hat = u_star + dF(u_star) / H_star  # one plain Newton step: implicit derivative of the mode
+    # one plain Newton step for the implicit derivative of the mode; tiny at a converged mode, and
+    # limited like the damped steps where F is flat in u (e.g. no echo predicted)
+    u_hat = u_star + jnp.clip(dF(u_star) / H_star, -MAX_STEP, MAX_STEP)
     return u_hat, jnp.maximum(-d2F(u_hat), 1e-12)
 
 

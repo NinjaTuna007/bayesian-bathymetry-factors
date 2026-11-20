@@ -11,7 +11,7 @@ import time
 
 import numpy as np
 import scipy.sparse as sp
-from sksparse.cholmod import cho_factor
+from sksparse.cholmod import CholmodNotPositiveDefiniteError, cho_factor
 
 from bbf.inference import ggn
 from bbf.inference.objective import Problem, data_term, value, value_and_grad
@@ -26,6 +26,7 @@ def gauss_newton(problem: Problem, d, beta, J, max_iter: int = 10, tol: float = 
     within `max_tries` increases finds an ascent.
     """
     F = data_term(problem)
+    Fw = data_term(problem, warm=True)  # log-kappa modes warm-started from the last evaluation
     lay = ggn.layout(problem)
     n = lay["n"]
     d, beta = np.asarray(d, dtype=float).copy(), np.asarray(beta, dtype=float).copy()
@@ -42,9 +43,13 @@ def gauss_newton(problem: Problem, d, beta, J, max_iter: int = 10, tol: float = 
         dd, db = np.zeros(n), np.zeros(3)
         for _ in range(max_tries):
             Hd = sp.csc_matrix(H + sp.diags(lam * np.maximum(diag, 1e-12)))
-            delta = cho_factor(Hd).solve(g)
+            try:
+                delta = cho_factor(Hd).solve(g)
+            except CholmodNotPositiveDefiniteError:
+                lam *= 10.0  # treat as a rejected step: more damping
+                continue
             dd, db = delta[:n], delta[n:n + 3]
-            new = value(problem, d + dd, beta + db, F)
+            new = value(problem, d + dd, beta + db, Fw, u0=det["u"])
             if new > ell:
                 accepted = True
                 break
@@ -54,7 +59,7 @@ def gauss_newton(problem: Problem, d, beta, J, max_iter: int = 10, tol: float = 
             break
         d, beta = d + dd, beta + db
         gain = new - ell
-        ell, (gd, gb), det = value_and_grad(problem, d, beta, F)
+        ell, (gd, gb), det = value_and_grad(problem, d, beta, Fw, u0=det["u"])
         lam = max(lam / 3.0, 1e-8)
         step = float(np.max(np.abs(dd)))
         history.append({"ell": ell, "lam": lam, "step": step, "time": time.time() - t0})

@@ -101,39 +101,66 @@ def _local_jacobian(theta: Theta, side: int, z_ref: float, dr: float):
     return jax.jit(jax.vmap(one, in_axes=(None, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
 
 
+@cache
+def _batched(mesh: M.Mesh, theta: Theta, side: int, u_key: tuple, dr: float):
+    """Jitted (d, poses) -> per-ping local Jacobians (P, K, 2, n_local), first bins (P, K), columns (P, K, n_local)."""
+    u = np.asarray(u_key)
+    idx = np.searchsorted(u, u - theta.shadow_margin, side="right") - 1
+    has = jnp.asarray(idx >= 0)
+    idx0 = jnp.asarray(np.maximum(idx, 0))
+    tris = jnp.asarray(mesh.triangles)
+    smooth = theta.smooth_normals
+    grad_ops = jnp.asarray(mesh._grad_ops)
+    tab = {k: jnp.asarray(v) for k, v in mesh.smooth_tables.items()} if smooth else {}
+    local = (_local_jacobian_smooth if smooth else _local_jacobian)(theta, side, mesh.z_ref, dr)
+
+    def one(d, pose):
+        s = G.pose_frame(pose)[0]
+        q = G.trace(mesh, d, pose, side, jnp.asarray(u))
+        tri, bary, inside = M.locate(mesh, q)
+        verts = tris[tri]
+        P = jnp.concatenate([q, (mesh.z_ref - jnp.sum(d[verts] * bary, axis=-1))[:, None]], axis=-1)
+        alpha = jnp.arctan2(P[:, 2] - s[2], jnp.linalg.norm(P[:, :2] - s[:2], axis=-1))
+        j = G._running_max(alpha)[1][idx0]
+        inside = inside & (P[:, 2] <= theta.z_water)  # seabed above the water surface returns nothing
+        dq = curve_length(P[:, :2])
+        if smooth:
+            cols = jnp.concatenate([tab["ring"][tri], verts[j]], axis=1)
+            jac = local(pose, d[cols], q, bary, bary[j], q[j], tab["corner"][tri], tab["face"][tri],
+                        tab["face_ok"][tri], tab["face_grad"][tri], dq, has, inside)
+        else:
+            cols = jnp.concatenate([verts, verts[j]], axis=1)
+            jac = local(pose, d[cols], q, bary, bary[j], q[j], grad_ops[tri], dq, has, inside)
+        i0 = jnp.floor(jnp.linalg.norm(P - s, axis=-1) / dr).astype(jnp.int32)
+        return jac, i0, cols
+
+    return jax.jit(jax.vmap(one, in_axes=(None, 0)))
+
+
+def ping_side_jacobians(mesh: M.Mesh, d, poses, side: int, theta: Theta, u, n_bins: int, dr: float,
+                        chunk: int = 32) -> list[sp.csr_matrix]:
+    r""":math:`\partial S / \partial d` (n_bins, n_vertices) of one side of every pose in poses (n, 6), sparse.
+
+    Pings are processed `chunk` at a time in one compiled call; only the sparse assembly is in numpy.
+    """
+    f = _batched(mesh, theta, side, tuple(np.asarray(u).tolist()), dr)
+    d = jnp.asarray(d)
+    poses = np.asarray(poses)
+    out = []
+    for s0 in range(0, len(poses), chunk):
+        idx = np.arange(s0, min(s0 + chunk, len(poses)))
+        padded = np.concatenate([idx, np.full(chunk - len(idx), idx[-1])])
+        jac, i0, cols = (np.asarray(a) for a in f(d, jnp.asarray(poses[padded])))
+        nl = cols.shape[-1]
+        for k in range(len(idx)):
+            rows = np.stack([i0[k], i0[k] + 1], axis=1)[:, :, None].repeat(nl, axis=2)
+            cc = cols[k][:, None, :].repeat(2, axis=1)
+            keep = (rows >= 0) & (rows < n_bins) & (jac[k] != 0)
+            out.append(sp.csr_matrix(sp.coo_matrix((jac[k][keep], (rows[keep], cc[keep])),
+                                                   shape=(n_bins, mesh.n_vertices))))
+    return out
+
+
 def ping_side_jacobian(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: int, dr: float) -> sp.csr_matrix:
     r""":math:`\partial S / \partial d` (n_bins, n_vertices) of one ping-side, sparse."""
-    d = jnp.asarray(d)
-    q = G.trace(mesh, d, pose, side, u)
-    tri, bary, inside = (np.asarray(a) for a in M.locate(mesh, q))
-    P, _, _ = G.samples(mesh, d, pose, side, u, smooth=theta.smooth_normals)
-    s = np.asarray(G.pose_frame(pose)[0])
-    Pn = np.asarray(P)
-    alpha = np.arctan2(Pn[:, 2] - s[2], np.linalg.norm(Pn[:, :2] - s[:2], axis=-1))
-    idx = np.searchsorted(np.asarray(u), np.asarray(u) - theta.shadow_margin, side="right") - 1
-    has = idx >= 0
-    at = np.asarray(G._running_max(jnp.asarray(alpha))[1])
-    j = at[np.maximum(idx, 0)]
-    inside = inside & (Pn[:, 2] <= theta.z_water)  # seabed above the water surface returns nothing
-    verts = mesh.triangles[tri]
-    dn = np.asarray(d)
-    if theta.smooth_normals:
-        tab = mesh.smooth_tables
-        cols6 = np.concatenate([tab["ring"][tri], verts[j]], axis=1)  # (K, 15)
-        jac = _local_jacobian_smooth(theta, side, mesh.z_ref, dr)(
-            jnp.asarray(pose), jnp.asarray(dn[cols6]), q, jnp.asarray(bary), jnp.asarray(bary[j]), q[j],
-            jnp.asarray(tab["corner"][tri]), jnp.asarray(tab["face"][tri]), jnp.asarray(tab["face_ok"][tri]),
-            jnp.asarray(tab["face_grad"][tri]), curve_length(P[:, :2]), jnp.asarray(has), jnp.asarray(inside))
-    else:
-        cols6 = np.concatenate([verts, verts[j]], axis=1)  # (K, 6)
-        jac = _local_jacobian(theta, side, mesh.z_ref, dr)(
-            jnp.asarray(pose), jnp.asarray(dn[cols6]), q, jnp.asarray(bary), jnp.asarray(bary[j]), q[j],
-            jnp.asarray(mesh._grad_ops[tri]), curve_length(P[:, :2]), jnp.asarray(has), jnp.asarray(inside))
-    jac = np.asarray(jac)  # (K, 2, n_local)
-    nl = cols6.shape[1]
-    r = np.linalg.norm(Pn - s, axis=-1)
-    i0 = np.floor(r / dr).astype(int)
-    rows = np.stack([i0, i0 + 1], axis=1)[:, :, None].repeat(nl, axis=2)
-    cols = cols6[:, None, :].repeat(2, axis=1)
-    keep = (rows >= 0) & (rows < n_bins) & (jac != 0)
-    return sp.csr_matrix(sp.coo_matrix((jac[keep], (rows[keep], cols[keep])), shape=(n_bins, mesh.n_vertices)))
+    return ping_side_jacobians(mesh, d, np.asarray(pose)[None], side, theta, u, n_bins, dr, chunk=1)[0]

@@ -113,8 +113,16 @@ def render(problem: Problem, d) -> list[np.ndarray]:
     return out
 
 
-def data_term(problem: Problem):
-    r"""Jitted :math:`F(S)` over all passes: (value, (:math:`\hat u` per pass (n, 2), :math:`\hat\mu` per pair))."""
+WARM_ITERS = 8  # damped Newton iterations for the log-kappa modes from the previous evaluation's
+
+
+def data_term(problem: Problem, warm: bool = False):
+    r"""Jitted :math:`F(S)` over all passes: (value, (:math:`\hat u` per pass (n, 2), :math:`\hat\mu` per pair)).
+
+    With `warm`, it is :math:`F(S, \hat u_0)`: each ping-side's log-kappa mode starts from
+    :math:`\hat u_0` (per pass (n, 2), e.g. the previous evaluation's) and takes only a few
+    Newton steps, which is enough within a Gauss--Newton loop where the modes move little.
+    """
     pb = problem
     th, dr = pb.theta, pb.dr
     uses = [jnp.asarray(u) for u in pb.uses()]
@@ -123,19 +131,24 @@ def data_term(problem: Problem):
     valids = [jnp.ones(lab.shape, bool) for lab in labels] if pb.valid is None else [jnp.asarray(v) for v in pb.valid]
     keys = sorted(pb.pairs)
 
-    def side_terms(side, y, S, use, lab, val):
+    def side_terms(side, y, S, use, lab, val, u0):
         Fu, _, _ = _objective(th, side, dr, y, S, use)
-        u_hat, H = mode(th, side, dr, y, S, use)
+        if warm:
+            u_hat, H = mode(th, side, dr, y, S, use, u0=u0, iters=WARM_ITERS)
+        else:
+            u_hat, H = mode(th, side, dr, y, S, use)
         ping = Fu(u_hat) + 0.5 * jnp.log(2 * jnp.pi) - 0.5 * jnp.log(H)
         return ping + log_shadow_side(th, side, lab, S, u_hat, val), u_hat
 
-    def F(S_list):
+    def F(S_list, u0_list=None):
         total, u_hats = 0.0, []
-        for y, S, use, lab, val in zip(ys, S_list, uses, labels, valids):
+        if u0_list is None:
+            u0_list = [jnp.zeros(y.shape[:2]) for y in ys]
+        for y, S, use, lab, val, u0 in zip(ys, S_list, uses, labels, valids, u0_list):
             us = []
             for side in (0, 1):
-                v, uh = jax.vmap(lambda yy, SS, uu, ll, vv, side=side: side_terms(side, yy, SS, uu, ll, vv))(
-                    y[:, side], S[:, side], use[:, side], lab[:, side], val[:, side])
+                v, uh = jax.vmap(lambda yy, SS, uu, ll, vv, u0s, side=side: side_terms(side, yy, SS, uu, ll, vv, u0s))(
+                    y[:, side], S[:, side], use[:, side], lab[:, side], val[:, side], u0[:, side])
                 total = total + v.sum()
                 us.append(uh)
             u_hats.append(jnp.stack(us, axis=1))
@@ -163,15 +176,17 @@ def data_vjp(problem: Problem, d, g_S: list[np.ndarray]) -> np.ndarray:
     return grad
 
 
-def value_and_grad(problem: Problem, d, beta, F=None):
+def value_and_grad(problem: Problem, d, beta, F=None, u0=None):
     r""":math:`\ell(d, \beta)`, its gradient (d, :math:`\beta`), and the data term's details.
 
-    F: a `data_term(problem)` to reuse (it is jitted once per problem); details hold the
-    rendered S, :math:`\hat u` per pass and :math:`\hat\mu` per pair.
+    F: a `data_term(problem)` to reuse (it is jitted once per problem), or a warm one
+    (`data_term(problem, warm=True)`) together with u0, the log-kappa modes to start from;
+    details hold the rendered S, :math:`\hat u` per pass and :math:`\hat\mu` per pair.
     """
     F = data_term(problem) if F is None else F
     S = render(problem, d)
-    (val, (u_hats, mus)), g_S = jax.value_and_grad(F, has_aux=True)([jnp.asarray(s) for s in S])
+    args = ([jnp.asarray(s) for s in S],) if u0 is None else ([jnp.asarray(s) for s in S], [jnp.asarray(x) for x in u0])
+    (val, (u_hats, mus)), g_S = jax.value_and_grad(F, has_aux=True)(*args)
     grad_d = data_vjp(problem, d, [np.asarray(g) for g in g_S])
     gd_prior, gb_prior = problem.prior.grad(np.asarray(d), np.asarray(beta))
     value = float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta))
@@ -179,9 +194,10 @@ def value_and_grad(problem: Problem, d, beta, F=None):
     return value, (grad_d + gd_prior, gb_prior), details
 
 
-def value(problem: Problem, d, beta, F=None) -> float:
-    r""":math:`\ell(d, \beta)` alone: one render and the data term, no gradient."""
+def value(problem: Problem, d, beta, F=None, u0=None) -> float:
+    r""":math:`\ell(d, \beta)` alone: one render and the data term, no gradient (warm with u0, as `value_and_grad`)."""
     F = data_term(problem) if F is None else F
     S = render(problem, d)
-    val, _ = F([jnp.asarray(s) for s in S])
+    S = [jnp.asarray(s) for s in S]
+    val, _ = F(S) if u0 is None else F(S, [jnp.asarray(x) for x in u0])
     return float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta))
