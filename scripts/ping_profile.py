@@ -32,6 +32,7 @@ from scipy.optimize import minimize
 from bbf import mesh as M
 from bbf import ping as P
 from bbf import prior as PR
+from bbf.io import Pass, load_patch
 
 jax.config.update("jax_enable_x64", True)
 
@@ -46,25 +47,13 @@ RHO, SIGMA, SIGMA_OBS = 3.0, 2.0, 0.05  # fill-in prior: range, std, per-point n
 FIT_EVERY = 100
 
 
-def load_patch(path: Path, name: str) -> dict[str, np.ndarray]:
-    z = np.load(path)
-    return {k.split("/", 1)[1]: z[k] for k in z.files if k.startswith(f"{name}/")}
-
-
-def poses(p: dict) -> np.ndarray:
-    """(n, 6) world poses (x, y, z, roll, pitch, yaw) of every ping, in patch coordinates."""
-    return np.column_stack([p["x"], p["y"], p["alt"], p["roll"], p["pitch"], p["yaw"]])
-
-
-def bathymetry_world(p: dict, X: np.ndarray, every: int = 2) -> np.ndarray:
+def bathymetry_world(ps: Pass, every: int = 2) -> np.ndarray:
     """3DSS points of every `every`-th ping in the world frame, (m, 3)."""
-    frames = jax.vmap(P.pose_frame)(jnp.asarray(X))
+    frames = jax.vmap(P.pose_frame)(jnp.asarray(ps.poses))
     s, R = np.asarray(frames[0]), np.asarray(frames[1])
-    k = p["bathy_ping"]
-    keep = k % every == 0
-    k = k[keep]
-    pts = np.column_stack([p["bathy_x"], p["bathy_y"], p["bathy_z"]])[keep].astype(float)
-    return s[k] + np.einsum("mij,mj->mi", R[k], pts)
+    keep = ps.bathy_ping % every == 0
+    k = ps.bathy_ping[keep]
+    return s[k] + np.einsum("mij,mj->mi", R[k], ps.bathy_xyz[keep])
 
 
 def seabed_on_mesh(world: np.ndarray, z_ref: float) -> tuple[M.Mesh, np.ndarray, np.ndarray]:
@@ -141,22 +130,20 @@ def main():
     ap.add_argument("--out-dir", type=Path, default=Path("figs"), help="writes ping_profile_<ping>.png")
     args = ap.parse_args()
 
-    p = load_patch(args.patches, args.patch)
-    X = poses(p)
-    n_bins, dr = p["port"].shape[1], float(p["range_res"])
+    ps = load_patch(args.patches, args.patch)
+    n_bins, dr = ps.n_bins, ps.dr
     r_bin = np.asarray(P.bin_ranges(n_bins, dr))
-    z_ref = float(np.median(p["alt"]))
+    z_ref = float(np.median(ps.poses[:, 2]))
 
-    world = bathymetry_world(p, X)
+    world = bathymetry_world(ps)
     mesh, d, seen = seabed_on_mesh(world, z_ref)
     print(f"mesh {mesh.n_vertices} vertices, {seen.mean():.0%} with 3DSS points; "
           f"depth {np.percentile(d[seen], 1):.1f}–{np.percentile(d[seen], 99):.1f} m below z_ref = {z_ref:.2f}")
-    X_local = X.copy()
-    X_local[:, :2] = mesh.to_local(X[:, :2])
+    X_local = ps.local_poses(mesh.origin)
 
-    idx = np.arange(0, len(X), FIT_EVERY)
+    idx = np.arange(0, ps.n_pings, FIT_EVERY)
     idx = np.union1d(idx, args.ping)
-    y = np.stack([np.stack([p["port"][i], p["starboard"][i]]).astype(float) ** 2 for i in idx])
+    y = ps.y[idx]
     u = P.u_grid(n_bins, dr)
     base = P.Theta(noise=NOISE, L=L_SHAPE, eps=EPS, eta=1.0, zeta=1.0, ell=1.0, log_kappa_mean=0.0,
                    log_kappa_std=1.0, gain_db=GAIN_DB)
