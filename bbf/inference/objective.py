@@ -169,3 +169,11 @@ def value_and_grad(problem: Problem, d, beta, F=None):
     value = float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta))
     details = {"S": S, "u": [np.asarray(u) for u in u_hats], "mu": [float(m) for m in mus], "data": float(val)}
     return value, (grad_d + gd_prior, gb_prior), details
+
+
+def value(problem: Problem, d, beta, F=None) -> float:
+    r""":math:`\ell(d, \beta)` alone: one render and the data term, no gradient."""
+    F = data_term(problem) if F is None else F
+    S = render(problem, d)
+    val, _ = F([jnp.asarray(s) for s in S])
+    return float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta))

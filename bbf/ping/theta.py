@@ -29,7 +29,7 @@ def _pair(v) -> np.ndarray:
     return np.broadcast_to(a, (2,)).copy() if a.ndim == 0 else a
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)  # hashed by identity: its array fields have no hash, and compiled code is cached per theta
 class Theta:
     r"""Parameters of the predicted intensity and the bin mixture.
 
