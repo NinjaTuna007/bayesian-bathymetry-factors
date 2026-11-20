@@ -89,3 +89,58 @@ def test_gradients_wrt_depth_and_location(m):
     # :math:`d(q)` is linear inside a face, so :math:`\partial d / \partial q` is the face gradient
     gq = jax.grad(lambda q: M.interpolate(m, d, q).sum())(q)
     np.testing.assert_allclose(gq[0], M.face_gradient(m, d)[int(tri[0])], atol=1e-9)
+
+
+def interior_edges(m):
+    """Edges shared by two triangles: (vertex pair, triangle pair) per edge."""
+    owners = {}
+    for k, t in enumerate(m.triangles):
+        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+            owners.setdefault((min(a, b), max(a, b)), []).append(k)
+    return [(e, ts) for e, ts in owners.items() if len(ts) == 2]
+
+
+def test_gradients_across_triangle_edges(m):
+    r"""Across a shared edge, :math:`d(q)` and :math:`\partial d / \partial d_i = \psi_i(q)` are
+    continuous, while :math:`\partial d / \partial q` jumps between the two face gradients.
+
+    The ping factor differentiates through all three, so each side of the edge, and the edge
+    itself, must give the gradient of a triangle that actually touches the point.
+    """
+    rng = np.random.default_rng(5)
+    d = jnp.asarray(rng.standard_normal(m.n_vertices))
+    edges = interior_edges(m)
+    picked = [edges[k] for k in rng.choice(len(edges), size=60, replace=False)]
+    v = m.vertices
+    directions = {round(math.degrees(math.atan2(*(v[j] - v[i])[::-1])) % 180) for (i, j), _ in picked}
+    assert directions == {0, 60, 120}  # all three edge orientations of the lattice
+
+    grad_q = jax.grad(lambda q: M.interpolate(m, d, q).sum())
+    grad_d = jax.grad(lambda d, q: M.interpolate(m, d, q).sum())
+    fg = np.asarray(M.face_gradient(m, d))
+    eps = 1e-6
+    for (i, j), (t1, t2) in picked:
+        mid = (v[i] + v[j]) / 2
+        e = (v[j] - v[i]) / m.h
+        nrm = np.array([-e[1], e[0]])
+        sides = mid + np.array([eps, -eps])[:, None] * nrm
+        # depth is continuous: both sides agree with the edge value to first order in eps
+        on_edge = float(M.interpolate(m, d, mid[None])[0])
+        assert on_edge == pytest.approx(float((d[i] + d[j]) / 2), abs=1e-9)
+        np.testing.assert_allclose(M.interpolate(m, d, sides), on_edge, atol=10 * eps)
+        # the hat-function weights are continuous: half on each edge vertex, from either side
+        for q in (mid, *sides):
+            g = np.asarray(grad_d(d, jnp.asarray(q[None])))
+            expect = np.zeros(m.n_vertices)
+            expect[[i, j]] = 0.5
+            np.testing.assert_allclose(g, expect, atol=1e-5)
+        # the spatial gradient is one-sided: each side gives its own face's gradient
+        tri_sides = {int(t) for t in np.asarray(M.locate(m, sides)[0])}
+        assert tri_sides == {t1, t2}
+        for q in sides:
+            t = int(M.locate(m, q[None])[0][0])
+            np.testing.assert_allclose(grad_q(jnp.asarray(q[None]))[0], fg[t], atol=1e-9)
+        # on the edge itself it is finite and belongs to one of the two faces
+        g_mid = np.asarray(grad_q(jnp.asarray(mid[None]))[0])
+        assert np.isfinite(g_mid).all()
+        assert min(np.abs(g_mid - fg[t1]).max(), np.abs(g_mid - fg[t2]).max()) < 1e-9
