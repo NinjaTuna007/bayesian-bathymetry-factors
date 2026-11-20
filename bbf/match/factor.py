@@ -18,7 +18,7 @@ With spikes and the side offset :math:`\mu` (starboard minus port gain constant,
     \log f_{ab} = \max_\mu \sum_m \log\bigl[(1 - \epsilon_m) p_L(e_m - \sigma_m \mu)
         + \epsilon_m u(e_m - \sigma_m \mu)\bigr],
 
-:math:`\epsilon_m = \epsilon_c + \epsilon_{c'}` and :math:`u` uniform on
+:math:`\epsilon_m = \epsilon_c + \epsilon_{c'}` (single-bin spike chances, `Theta.pair_eps`) and :math:`u` uniform on
 :math:`[-E_\mathrm{max}, E_\mathrm{max}]`. :math:`\mu` is profiled out by damped Newton steps,
 kept within :math:`\pm E_\mathrm{max}`, and one plain Newton step from the stopped-gradient
 value, so gradients with respect to the depths are those of the profile.
@@ -56,8 +56,8 @@ def noise_floor(theta: Theta) -> np.ndarray:
 
 
 def pair_eps(pairs: Pairs, theta: Theta) -> np.ndarray:
-    r"""Outlier probability (m,) of each pair: the two bins' spike chances, summed and clipped."""
-    eps = np.asarray(theta.eps)
+    r"""Outlier probability (m,) of each pair: the two bins' spike chances (`Theta.pair_eps`, else `eps`), summed and clipped."""
+    eps = np.asarray(theta.eps if theta.pair_eps is None else theta.pair_eps)
     return np.clip(eps[pairs.side_a] + eps[pairs.side_b], 1e-12, 0.5)
 
 

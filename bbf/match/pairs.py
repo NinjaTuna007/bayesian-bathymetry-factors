@@ -1,6 +1,7 @@
 r"""Matched pairs between two passes: chosen in the outer loop, held fixed while d is refined.
 
-Locations :math:`q` are drawn uniformly where the two passes' swaths overlap. At the current
+Locations :math:`q` are drawn uniformly (`draw_overlap`) or on a dense grid (`grid_overlap`)
+where the two passes' swaths overlap. At the current
 depths each pass sends :math:`q` to the ping whose plane passes nearest the seabed point
 :math:`P(q)`, the side it lies on and the bin of its slant range. A draw becomes a pair
 when both passes see it, the echo dominates the background (below), and neither of its
@@ -58,16 +59,34 @@ def swath_box(poses, max_range: float) -> tuple[float, float, float, float]:
     return float(ex.min()), float(ex.max()), float(ey.min()), float(ey.max())
 
 
+def _overlap_box(poses_a, poses_b, max_range: float):
+    a, b = swath_box(poses_a, max_range), swath_box(poses_b, max_range)
+    return max(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), min(a[3], b[3])
+
+
 def draw_overlap(poses_a, poses_b, max_range: float, n: int, rng=None) -> np.ndarray:
     """n locations (n, 2) uniform in the intersection of the two passes' swath boxes; (0, 2) if disjoint."""
-    a, b = swath_box(poses_a, max_range), swath_box(poses_b, max_range)
-    x0, x1, y0, y1 = max(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), min(a[3], b[3])
+    x0, x1, y0, y1 = _overlap_box(poses_a, poses_b, max_range)
     if x0 >= x1 or y0 >= y1:
         return np.zeros((0, 2))
     return np.random.default_rng(rng).uniform([x0, y0], [x1, y1], size=(n, 2))
 
 
-def project(mesh: M.Mesh, d, poses, q, n_bins: int, dr: float):
+def grid_overlap(poses_a, poses_b, max_range: float, spacing: float, rng=None) -> np.ndarray:
+    """Locations (m, 2) on a square grid of `spacing` over the intersection of the swath boxes, randomly offset.
+
+    Dense, so most bins both passes see get a candidate pair; the random offset changes
+    which bins are tried from round to round.
+    """
+    x0, x1, y0, y1 = _overlap_box(poses_a, poses_b, max_range)
+    if x0 >= x1 or y0 >= y1:
+        return np.zeros((0, 2))
+    off = np.random.default_rng(rng).uniform(0, spacing, 2)
+    gx, gy = np.meshgrid(np.arange(x0 + off[0], x1, spacing), np.arange(y0 + off[1], y1, spacing))
+    return np.column_stack([gx.ravel(), gy.ravel()])
+
+
+def project(mesh: M.Mesh, d, poses, q, n_bins: int, dr: float, chunk: int = 4096):
     r"""Ping, side and bin (m,) each that a pass sees seabed point :math:`P(q)` in; :math:`-1` where unseen.
 
     The ping is the one whose plane passes nearest :math:`P(q)`, among pings within the
@@ -75,6 +94,10 @@ def project(mesh: M.Mesh, d, poses, q, n_bins: int, dr: float):
     point beyond the pass's ends is not snapped to its first or last ping). The side is
     the sign of the sonar-frame port coordinate; the bin is the nearest to the slant range.
     """
+    q = np.asarray(q)
+    if len(q) > chunk:  # the ping-plane distances are (points, pings): keep them small
+        parts = [project(mesh, d, poses, q[i:i + chunk], n_bins, dr, chunk) for i in range(0, len(q), chunk)]
+        return tuple(np.concatenate(x) for x in zip(*parts, strict=True))
     poses = np.asarray(poses)
     P = np.asarray(M.seabed_point(mesh, d, q))
     s, R = (np.asarray(a) for a in jax.vmap(G.pose_frame)(poses))
