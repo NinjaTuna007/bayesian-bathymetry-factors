@@ -2,7 +2,7 @@
 
 Public placeholder for the implementation of *Bayesian Bathymetry Factors from Side-scan Sonar* (manuscript in preparation).
 
-The manuscript is not in this repository. This tree only names the pieces the paper specifies, so the layout is fixed before any code lands. There is no implementation here.
+The manuscript is not in this repository. This tree follows the pieces the paper specifies.
 
 Side-scan sonar records intensity against slant range. The elevation of each echo is not in the reading. The method puts a depth on every vertex of a triangle mesh and scores those depths with three factors:
 
@@ -16,7 +16,7 @@ Poses stay outside the graph. Navigation uncertainty is accounted for after the 
 
 ## Layout
 
-| Path | Will hold |
+| Path | Holds |
 |---|---|
 | [`bbf/mesh/`](bbf/mesh/README.md) | Survey mesh, hat functions, depth interpolation |
 | [`bbf/prior/`](bbf/prior/README.md) | Trend prior and the Matérn precision on the vertices |
@@ -35,4 +35,4 @@ Set `SSS_DATA` to the directory holding the `rosbag2_*` survey bags, e.g. in an 
 
 ## Status
 
-Empty on purpose. A tagged release will be the first version that runs.
+Mesh and prior implemented; the ping and match factors, inference and data are still placeholders. A tagged release will be the first version that runs.
