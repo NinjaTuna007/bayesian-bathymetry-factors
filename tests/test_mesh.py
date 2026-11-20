@@ -153,3 +153,23 @@ def test_seabed_point_uses_z_ref():
     P = np.asarray(M.seabed_point(m, d, q))
     np.testing.assert_allclose(P[:, :2], q)
     np.testing.assert_allclose(P[:, 2], 55.0 - plane(q), atol=1e-9)
+
+
+def test_smooth_normals_equal_face_normals_on_a_plane(m):
+    d = plane(m.vertices)
+    q = m.to_local(np.random.default_rng(7).uniform([100.0, 200.0], [130.0, 220.0], size=(200, 2)))
+    np.testing.assert_allclose(M.smooth_normal(m, d, q), M.normal(m, d, q), atol=1e-12)
+
+
+def test_smooth_normals_are_continuous_across_edges(m):
+    d = jnp.asarray(np.random.default_rng(8).standard_normal(m.n_vertices) * 0.5)
+    (i, j), _ = interior_edges(m)[len(interior_edges(m)) // 2]
+    v = m.vertices
+    mid = (v[i] + v[j]) / 2
+    e = (v[j] - v[i]) / m.h
+    nrm = np.array([-e[1], e[0]])
+    eps = 1e-6
+    sides = np.stack([mid + eps * nrm, mid - eps * nrm])
+    jump_face = np.linalg.norm(np.diff(np.asarray(M.normal(m, d, sides)), axis=0))
+    jump_smooth = np.linalg.norm(np.diff(np.asarray(M.smooth_normal(m, d, sides)), axis=0))
+    assert jump_face > 1e-3 and jump_smooth < 1e-4

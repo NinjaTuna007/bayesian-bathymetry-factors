@@ -73,12 +73,20 @@ def trace(mesh: M.Mesh, d, pose, side: int, u, iters: int = 3):
     return s[:2] + u[:, None] * out + w[:, None] * fwd
 
 
-def samples(mesh: M.Mesh, d, pose, side: int, u):
-    r"""Seabed points :math:`P_k` (K, 3), upward face normals :math:`n_k` (K, 3), and an on-mesh mask (K,)."""
+def samples(mesh: M.Mesh, d, pose, side: int, u, smooth: bool = False):
+    r"""Seabed points :math:`P_k` (K, 3), upward normals :math:`n_k` (K, 3), and an on-mesh mask (K,).
+
+    Normals are the triangles' own, or with `smooth` the vertex normals blended across each triangle.
+    """
     q = trace(mesh, d, pose, side, u)
     depth, tri, inside = _depth(mesh, d, q)
-    g = M.face_gradient(mesh, d)[tri]
-    n = jnp.concatenate([g, jnp.ones_like(g[:, :1])], axis=-1)
+    if smooth:
+        _, bary, _ = M.locate(mesh, q)
+        vn = M.vertex_normals(mesh, d)[jnp.asarray(mesh.triangles)[tri]]
+        n = jnp.sum(bary[..., None] * vn, axis=-2)
+    else:
+        g = M.face_gradient(mesh, d)[tri]
+        n = jnp.concatenate([g, jnp.ones_like(g[:, :1])], axis=-1)
     n = n / jnp.linalg.norm(n, axis=-1, keepdims=True)
     P = jnp.concatenate([q, (mesh.z_ref - depth)[:, None]], axis=-1)
     return P, n, inside

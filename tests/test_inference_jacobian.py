@@ -46,3 +46,16 @@ def test_jacobian_close_under_pitch(scene):
     _, jvp = jax.jvp(lambda dd: P.unit_intensity(m, dd, pose, 1, th, u, N_BINS, DR), (d,), (jnp.asarray(dv),))
     jvp = np.asarray(jvp)
     assert np.linalg.norm(J @ dv - jvp) < 0.1 * np.linalg.norm(jvp)
+
+
+@pytest.mark.parametrize("side", [0, 1])
+def test_jacobian_with_smooth_normals_matches_jvp(scene, side):
+    import dataclasses
+    m, d, th, u = scene
+    th = dataclasses.replace(th, smooth_normals=True)
+    pose = jnp.array([0.0, 0.3, SONAR_Z, 0.0, 0.0, 0.0])
+    J = ping_side_jacobian(m, d, pose, side, th, u, N_BINS, DR)
+    dv = np.sin(m.vertices[:, 0] / 3.7) * np.cos(m.vertices[:, 1] / 2.9)
+    _, jvp = jax.jvp(lambda dd: P.unit_intensity(m, dd, pose, side, th, u, N_BINS, DR), (d,), (jnp.asarray(dv),))
+    jvp = np.asarray(jvp)
+    np.testing.assert_allclose(J @ dv, jvp, rtol=1e-6, atol=1e-8 * np.abs(jvp).max())

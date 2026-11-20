@@ -57,6 +57,8 @@ class Theta:
     :math:`\epsilon_B + (1 - \epsilon_B) p_\mathrm{fa}` with :math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`.
 
     `z_water` is the world height of the water surface: seabed above it returns no echo.
+    `smooth_normals` shades with vertex normals blended across each triangle instead of the
+    triangle's own normal, so the predicted intensity has no steps at triangle edges.
     """
     noise: npt.ArrayLike
     L: float
@@ -76,6 +78,7 @@ class Theta:
     label_fa: float = 0.01
     wc_lit: npt.ArrayLike | None = None
     z_water: float = math.inf
+    smooth_normals: bool = False
 
     def __post_init__(self):
         for name in ("noise", "eps", "eta", "zeta", "ell", "log_kappa_mean", "log_kappa_std"):
