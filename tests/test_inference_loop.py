@@ -120,3 +120,32 @@ def test_inference_with_free_sonar_parameters():
     assert np.all(np.isfinite(out["psi"])) and not np.allclose(out["psi"], psi0)
     np.testing.assert_allclose(P.psi_of(out["theta"]), out["psi"])
     np.testing.assert_allclose(P.psi_of(out["problem"].theta), out["psi"])
+
+
+@pytest.mark.slow
+def test_inference_with_reflectivity_field():
+    """The outer loop with the shared field: fitted at the start depths, then stepped with them; every step ascends."""
+    from bbf import match as Mt
+    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = np.asarray(DEPTH - 0.15 * np.cos(v[:, 0]))
+    xi_true = jnp.asarray(0.6 * np.sin(v[:, 0] / 3.0 + 1.0) * np.cos(v[:, 1] / 5.0))
+    th = P.Theta(noise=1e-7, L=5.0, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5)
+    u = P.u_grid(N_BINS, DR, du=0.05)
+    rng = np.random.default_rng(2)
+    passes = []
+    for x0 in (-8.0, 8.0):
+        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, SONAR_Z), np.zeros((9, 3))])
+        S = np.asarray(P.unit_intensities(m, jnp.asarray(d_true), poses, th, u, N_BINS, DR, xi_true))
+        y = rng.gamma(th.L, (S + 1e-7) / th.L)
+        passes.append(Pass(name=f"x{x0}", poses=poses, y=y, dr=DR, t=np.arange(9) * 0.1))
+    beta = np.array([0.0, 0.0, DEPTH])
+    prior = PR.Prior(m, 4.0, 0.5, mu_beta=beta, Sigma_beta=np.diag([0.01, 0.01, 1.0]))
+    out = infer(passes, m, prior, th, np.full(m.n_vertices, DEPTH), beta, u, rounds=2, inner=4, calib_every=3, chunk=9,
+                refl=Mt.Reflectivity(m, 4.0, 0.7), laplace_samples=30, log=lambda s: None)
+    for r in out["history"]:
+        assert np.all(np.diff([h["ell"] for h in r["gn"]]) > 0)
+    seen = (np.abs(v[:, 1]) <= 4) & (np.abs(v[:, 0]) <= 28)
+    assert np.corrcoef(out["xi"][seen], np.asarray(xi_true)[seen])[0, 1] > 0.7
+    assert out["sd_xi"].shape == out["xi"].shape and np.all(np.isfinite(out["sd_d"]))
+    assert out["problem"].refl is not None
