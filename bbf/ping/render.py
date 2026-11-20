@@ -14,6 +14,11 @@ centred at range :math:`b \Delta r`, and :math:`w_b` splits each sample linearly
 its two nearest bins, :math:`w_b(r) = \max(0, 1 - |r / \Delta r - b|)`, so the bins move
 smoothly with the depths and range timing carries a gradient. The weights of a sample sum
 to one, so the split conserves :math:`\sum_b S_b \Delta r`.
+
+With a log-reflectivity field :math:`\xi(q) = \sum_i \xi_i \psi_i(q)` on the mesh (`bbf.match`),
+the seabed's own reflectivity enters the integrand, :math:`a_c(q) V(q) \to e^{\xi(q)} a_c(q) V(q)`:
+every ping of every pass that reaches :math:`q` sees the same :math:`e^{\xi(q)}`, and
+:math:`\kappa_{t,c}` is left as the gain of the ping-side.
 """
 import jax
 import jax.numpy as jnp
@@ -49,26 +54,37 @@ def split_into_bins(r, w, n_bins: int, dr: float):
     return out.at[i0 + 1].add(f * w, mode="drop")
 
 
-def unit_intensity(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: int, dr: float):
-    r"""Unit intensity :math:`S_b` (n_bins,) of one side, differentiable in d and the pose.
+def sample_weights(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, dr: float, xi=None):
+    r"""Per curve sample: weight :math:`e^{\xi(q_k)} a_k V_k \Delta q_k / \Delta r` (K,), range :math:`r_k` (K,) and location :math:`q_k` (K, 2).
 
-    u: horizontal sample distances (K,), ordered outboard, see `u_grid`. Shadowed samples
-    are weighted by their diffracted visibility; samples off the mesh add nothing.
+    Shadowed samples are weighted by their diffracted visibility; samples off the mesh get zero.
     """
     P, n, inside = G.samples(mesh, d, pose, side, u)
     a, r = G.echo(theta, pose, side, P, n)
     V = G.horizon_visibility(P, G.pose_frame(pose)[0], u, theta.shadow_margin, theta.wavelength, inside)
     wet = inside & (P[:, 2] <= theta.z_water)  # seabed above the water surface returns nothing
     w = jnp.where(wet, a * V * curve_length(P[:, :2]), 0.0) / dr
+    if xi is not None:
+        w = w * jnp.exp(G.field_at(mesh, xi, P[:, :2]))
+    return w, r, P[:, :2]
+
+
+def unit_intensity(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: int, dr: float, xi=None):
+    r"""Unit intensity :math:`S_b` (n_bins,) of one side, differentiable in d, the pose and :math:`\xi`.
+
+    u: horizontal sample distances (K,), ordered outboard, see `u_grid`; xi: vertex values (n,)
+    of the log-reflectivity field (default: none, :math:`\xi = 0`).
+    """
+    w, r, _ = sample_weights(mesh, d, pose, side, theta, u, dr, xi)
     return split_into_bins(r, w, n_bins, dr)
 
 
-def unit_intensities(mesh: M.Mesh, d, poses, theta: Theta, u, n_bins: int, dr: float):
+def unit_intensities(mesh: M.Mesh, d, poses, theta: Theta, u, n_bins: int, dr: float, xi=None):
     r"""Unit intensities (n, 2, n_bins) of both sides of every pose in poses (n, 6), mesh-local.
 
     Maps `unit_intensity` over the poses one at a time, so memory stays that of one ping.
     """
     poses = jnp.asarray(poses)
-    sides = [jax.lax.map(lambda pose, side=side: unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr), poses)
+    sides = [jax.lax.map(lambda pose, side=side: unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr, xi), poses)
              for side in (0, 1)]
     return jnp.stack(sides, axis=1)
