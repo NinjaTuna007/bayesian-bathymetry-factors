@@ -139,7 +139,7 @@ def log_ping_side(theta: Theta, side: int, dr: float, y, S, use=None):
     r"""Laplace approximation of :math:`\log \int \prod_b p(y_b \mid S, u)\, p(u)\, \mathrm{d}u` for one side.
 
     y, S: (n_bins,) measured intensity and unit intensity; use: bins to include (default
-    all), e.g. without the matched bins. Bins with :math:`y \le 0` are always left out.
+    all), e.g. the lit blocks only. Bins with :math:`y \le 0` are always left out.
     """
     use = jnp.ones(S.shape, dtype=bool) if use is None else jnp.asarray(use, dtype=bool)
     return laplace_ping_side(theta, side, dr, y, S, use)[0]

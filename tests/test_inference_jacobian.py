@@ -46,3 +46,25 @@ def test_jacobian_close_under_pitch(scene):
     _, jvp = jax.jvp(lambda dd: P.unit_intensity(m, dd, pose, 1, th, u, N_BINS, DR), (d,), (jnp.asarray(dv),))
     jvp = np.asarray(jvp)
     assert np.linalg.norm(J @ dv - jvp) < 0.1 * np.linalg.norm(jvp)
+
+
+@pytest.mark.parametrize("side", [0, 1])
+def test_field_jacobian_matches_jvp(scene, side):
+    r"""With the field, the columns after the depths' are :math:`\partial S / \partial \xi`, exact for any pose (the trace does not move with :math:`\xi`)."""
+    m, d, th, u = scene
+    v = m.vertices
+    xi = jnp.asarray(0.5 * np.cos(v[:, 0] / 4) * np.sin(v[:, 1] / 3 + 1.0))
+    pose = jnp.array([0.0, 0.3, SONAR_Z, 0.0, 0.0, 0.0])
+    n = m.n_vertices
+    J = ping_side_jacobian(m, d, pose, side, th, u, N_BINS, DR, xi=xi)
+    assert J.shape == (N_BINS, 2 * n)
+    dv, dx = np.sin(v[:, 0] / 3 + 0.4) * np.cos(v[:, 1] / 5), np.cos(v[:, 0] / 5) * np.sin(v[:, 1] / 2)
+    _, jvp = jax.jvp(lambda dd, xx: P.unit_intensity(m, dd, pose, side, th, u, N_BINS, DR, xx), (d, xi),
+                     (jnp.asarray(dv), jnp.asarray(dx)))
+    jvp = np.asarray(jvp)
+    np.testing.assert_allclose(J @ np.concatenate([dv, dx]), jvp, rtol=1e-6, atol=1e-8 * np.abs(jvp).max())
+    tilted = jnp.array([0.0, 0.3, SONAR_Z, 0.03, 0.05, 0.2])
+    Jt = ping_side_jacobian(m, d, tilted, side, th, u, N_BINS, DR, xi=xi)
+    _, jvp = jax.jvp(lambda xx: P.unit_intensity(m, d, tilted, side, th, u, N_BINS, DR, xx), (xi,), (jnp.asarray(dx),))
+    jvp = np.asarray(jvp)
+    np.testing.assert_allclose(Jt[:, n:] @ dx, jvp, rtol=1e-6, atol=1e-8 * np.abs(jvp).max())

@@ -37,14 +37,9 @@ def coarsen_pass(ps: Pass, k: int) -> Pass:
 
 
 def coarsen_theta(theta: Theta, k: int) -> Theta:
-    """Parameters of the k-bin means: shape kL, spike chance per k bins, spike levels over k, one label block per bin.
-
-    The match factor keeps the single-bin spike chance (`Theta.pair_eps`): a spike in one of
-    k bins moves their mean by about the spike over k, rarely enough to make a pair an outlier.
-    """
+    """Parameters of the k-bin means: shape kL, spike chance per k bins, spike levels over k, one label block per bin."""
     if k == 1:
         return theta
     eps = 1.0 - (1.0 - np.asarray(theta.eps)) ** k
-    pair_eps = theta.eps if theta.pair_eps is None else theta.pair_eps
     return dataclasses.replace(theta, L=k * theta.L, eps=eps, eta=np.asarray(theta.eta) / k,
-                               zeta=np.asarray(theta.zeta) / k, block=1, pair_eps=pair_eps)
+                               zeta=np.asarray(theta.zeta) / k, block=1)

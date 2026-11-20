@@ -43,7 +43,7 @@ def run():
     beta0 = I.plane_fit(pts, m)
     d0 = I.initial_depths(m, beta0)
     prior = PR.Prior(m, 5.0, 2.0, mu_beta=beta0, Sigma_beta=np.diag([0.01, 0.01, 4.0]))
-    out = infer(passes, m, prior, th, d0, beta0, u, rounds=2, inner=8, n_draws=1500, calib_every=3, chunk=4,
+    out = infer(passes, m, prior, th, d0, beta0, u, rounds=2, inner=8, calib_every=3, chunk=4,
                 log=lambda s: None)
     seen = (np.abs(v[:, 1]) <= 4) & (np.abs(v[:, 0]) <= 30)
     return d_true, d0, out, seen
@@ -85,7 +85,7 @@ def test_trend_search_crosses_to_the_true_tilt():
     b0 = np.array([0.08, 0.0, 20.0])
     d0 = b0[0] * v[:, 0] + b0[2]
     prior = PR.Prior(m, 5.0, 2.0, mu_beta=b0, Sigma_beta=np.diag([0.01, 0.01, 4.0]))
-    out = infer(passes, m, prior, th, d0, b0, u, rounds=1, inner=8, n_draws=1500, calib_every=3, chunk=4,
+    out = infer(passes, m, prior, th, d0, b0, u, rounds=1, inner=8, calib_every=3, chunk=4,
                 laplace_samples=100, trend_search={"slopes_x": np.arange(-0.02, 0.131, 0.025), "steps": 4},
                 log=lambda s: None)
     err = out["d"] - d_true
@@ -113,7 +113,7 @@ def test_inference_with_free_sonar_parameters():
     sd = np.array([[np.radians(15), np.radians(20), 0.2]] * 2)
     prior = PR.Prior(m, 5.0, 2.0, mu_beta=np.array([0.0, 0.0, DEPTH]), Sigma_beta=np.diag([0.01, 0.01, 4.0]))
     out = infer(passes, m, prior, wrong, jnp.asarray(d_true), np.array([0.0, 0.0, DEPTH]), u, rounds=2, inner=4,
-                n_draws=1500, calib_every=3, chunk=4, psi_prior=(psi0, sd), log=lambda s: None)
+                calib_every=3, chunk=4, psi_prior=(psi0, sd), log=lambda s: None)
     for r in out["history"]:
         e = [h["ell"] for h in r["gn"]]
         assert np.all(np.diff(e) > 0)

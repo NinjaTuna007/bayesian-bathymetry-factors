@@ -14,10 +14,19 @@ from sksparse.cholmod import cho_factor
 
 from bbf import mesh as M
 from bbf.io import Pass
-from bbf.match.pairs import swath_box
 from bbf.ping.factor import bin_ranges, log_gain
 from bbf.ping.theta import Theta
 from bbf.prior import Prior
+
+
+def swath_box(poses, max_range: float) -> tuple[float, float, float, float]:
+    """Axis-aligned box (xmin, xmax, ymin, ymax) holding every ping's swath, from the poses (n, 6)."""
+    poses = np.asarray(poses)
+    yaw = poses[:, 5]
+    sx, sy = max_range * np.cos(yaw), -max_range * np.sin(yaw)  # starboard is :math:`(\cos\psi, -\sin\psi)`
+    ex = np.concatenate([poses[:, 0] + sx, poses[:, 0] - sx])
+    ey = np.concatenate([poses[:, 1] + sy, poses[:, 1] - sy])
+    return float(ex.min()), float(ex.max()), float(ey.min()), float(ey.max())
 
 
 def mesh_for_passes(passes: list[Pass], h: float = 0.5, buffer: float = 10.0) -> M.Mesh:

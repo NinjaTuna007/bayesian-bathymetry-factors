@@ -1,9 +1,8 @@
 r"""The log posterior of the depths and its gradient, through the rendered unit intensities.
 
 Every data factor depends on the depths only through the unit intensities :math:`S` of the
-pings (`bbf.ping.unit_intensity`): the ping factor through each ping-side's :math:`S`, the
-shadow factor through block means of :math:`S`, and the match factor through :math:`S` at the
-pair bins. So
+pings (`bbf.ping.unit_intensity`): the ping factor through each ping-side's :math:`S` and the
+shadow factor through block means of :math:`S`. So
 
 .. math::
 
@@ -13,12 +12,18 @@ and :math:`\nabla_d F = J^\top \nabla_S F` with :math:`J = \partial S / \partial
 is one JAX gradient over all pings; :math:`J^\top` is applied in chunks of pings, so memory
 stays that of one chunk.
 
+With `Problem.refl` set, the log-reflectivity field :math:`\xi` on the vertices (`bbf.match`) is
+an unknown too. It enters through the render alone, :math:`S = S(d, \xi)`, which is how the
+passes are matched: all of them render through the same field. Its prior :math:`\log p(\xi)` is
+added, and the gradient in :math:`\xi` is :math:`(\partial S / \partial \xi)^\top \nabla_S F` from the same
+reverse pass. Without it :math:`\xi = 0`.
+
 The sonar parameters :math:`\psi` (beam centre and width, linear gain; `bbf.ping.theta.psi_of`)
 are an argument too: the beam reaches :math:`F` through :math:`S`, the gain directly. With
 `Problem.psi_prior` set they are unknowns of the graph with a Gaussian prior, and the gradient
 includes them; otherwise they stay at the values in `Problem.theta`.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cache, cached_property, lru_cache
 
 import jax
@@ -26,8 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from bbf import mesh as M
-from bbf.match.factor import log_match_factor
-from bbf.match.pairs import Pairs, matched_mask
+from bbf.match.reflectivity import Reflectivity
 from bbf.ping.factor import WARM_ITERS, laplace_ping_side
 from bbf.ping.render import unit_intensity
 from bbf.ping.shadow import log_shadow_side, ping_use
@@ -37,10 +41,10 @@ from bbf.prior import Prior
 
 @dataclass(frozen=True, eq=False)  # hashed by identity, so the data term can be cached per problem
 class Problem:
-    """Everything the objective needs, with the outer loop's choices (labels, pairs) fixed.
+    """Everything the objective needs, with the outer loop's choices (labels) fixed.
 
     poses: per pass (n, 6), mesh-local; y: per pass (n, 2, B) intensities; labels: per pass
-    (n, 2, n_blocks) lit/shadow labels; pairs: matched pairs keyed by pass indices (a, b).
+    (n, 2, n_blocks) lit/shadow labels.
     """
     mesh: M.Mesh
     prior: Prior
@@ -50,14 +54,19 @@ class Problem:
     labels: list[np.ndarray]
     u: np.ndarray
     dr: float
-    pairs: dict[tuple[int, int], Pairs] = field(default_factory=dict)
     chunk: int = 32
     valid: list[np.ndarray] | None = None  # per pass (n, 2, n_blocks): blocks to use (see onset_valid)
     psi_prior: tuple[np.ndarray, np.ndarray] | None = None  # (mean, sd) of psi (2, 3); None: psi fixed
+    refl: Reflectivity | None = None  # prior of the log-reflectivity field xi; None: no field
 
     @property
     def free_psi(self) -> bool:
         return self.psi_prior is not None
+
+    @property
+    def n_xi(self) -> int:
+        r"""Number of unknowns of :math:`\xi`: one per vertex, or none without the field."""
+        return 0 if self.refl is None else self.mesh.n_vertices
 
     def psi_log_prior(self, psi) -> tuple[float, np.ndarray]:
         r"""Gaussian log prior of :math:`\psi` and its gradient (2, 3); zero when :math:`\psi` is fixed."""
@@ -67,27 +76,27 @@ class Problem:
         z = (np.asarray(psi) - mean) / sd
         return float(-0.5 * np.sum(z**2) - np.sum(np.log(sd)) - z.size * 0.5 * np.log(2 * np.pi)), -z / sd
 
+    def xi_log_prior(self, xi) -> tuple[float, np.ndarray]:
+        r""":math:`\log p(\xi)` and its gradient (n,); zero without the field."""
+        if self.refl is None:
+            return 0.0, np.zeros(self.mesh.n_vertices)
+        return self.refl.log_density(np.asarray(xi)), self.refl.grad(np.asarray(xi))
+
     @property
     def n_bins(self) -> int:
         return self.y[0].shape[-1]
 
     def uses(self) -> list[np.ndarray]:
-        """Per pass (n, 2, B): bins the ping factor scores (lit blocks, minus matched bins)."""
+        """Per pass (n, 2, B): bins the ping factor scores (those in valid lit blocks)."""
         return self._uses
 
     @cached_property
     def _uses(self) -> list[np.ndarray]:
         out = []
         for p, (y, lab) in enumerate(zip(self.y, self.labels, strict=True)):
-            matched = np.zeros(y.shape, bool)
-            for (a, b), pr in self.pairs.items():
-                if a == p:
-                    matched |= matched_mask(pr, len(y), self.n_bins, "a")
-                if b == p:
-                    matched |= matched_mask(pr, len(y), self.n_bins, "b")
             val = None if self.valid is None else self.valid[p]
-            out.append(np.stack([ping_use(lab[t], self.n_bins, self.theta.block, matched[t],
-                                          None if val is None else val[t]) for t in range(len(y))]))
+            out.append(np.stack([ping_use(lab[t], self.n_bins, self.theta.block, None if val is None else val[t])
+                                 for t in range(len(y))]))
         return out
 
 
@@ -103,35 +112,35 @@ def _key(pb: Problem) -> tuple:
     return (pb.mesh, render_key(pb.theta), np.asarray(pb.u).tobytes(), pb.n_bins, pb.dr)
 
 
-def _render_chunk(key: tuple, d, poses, psi):
+def _render_chunk(key: tuple, d, poses, psi, xi):
     mesh, rkey, u_bytes, n_bins, dr = key
     th = render_theta(rkey, psi)
     u = np.frombuffer(u_bytes)
-    return jnp.stack([jax.vmap(lambda pose, side=side: unit_intensity(mesh, d, pose, side, th, u, n_bins, dr))(poses)
+    return jnp.stack([jax.vmap(lambda pose, side=side: unit_intensity(mesh, d, pose, side, th, u, n_bins, dr, xi))(poses)
                       for side in (0, 1)], axis=1)
 
 
 @cache
 def _render_jit(key: tuple):
-    return jax.jit(lambda d, poses, psi: _render_chunk(key, d, poses, psi))
+    return jax.jit(lambda d, poses, psi, xi: _render_chunk(key, d, poses, psi, xi))
 
 
 @cache
 def _vjp_jit(key: tuple):
-    def chunk_vjp(d, poses, psi, g):
-        _, vjp = jax.vjp(lambda d, psi: _render_chunk(key, d, poses, psi), d, psi)
+    def chunk_vjp(d, poses, psi, xi, g):
+        _, vjp = jax.vjp(lambda d, psi, xi: _render_chunk(key, d, poses, psi, xi), d, psi, xi)
         return vjp(g)
     return jax.jit(chunk_vjp)
 
 
 @cache
 def _beam_jvp_jit(key: tuple):
-    def chunk_jvp(d, poses, psi):
+    def chunk_jvp(d, poses, psi, xi):
         # side c's S depends only on side c's beam, so one tangent per column covers both sides
         cols = []
         for k in (0, 1):
             t = jnp.zeros_like(psi).at[:, k].set(1.0)
-            cols.append(jax.jvp(lambda p: _render_chunk(key, d, poses, p), (psi,), (t,))[1])
+            cols.append(jax.jvp(lambda p: _render_chunk(key, d, poses, p, xi), (psi,), (t,))[1])
         return jnp.stack(cols, axis=-1)
     return jax.jit(chunk_jvp)
 
@@ -140,37 +149,42 @@ def _psi(problem: Problem, psi):
     return jnp.asarray(psi_of(problem.theta) if psi is None else psi, dtype=float)
 
 
-def render(problem: Problem, d, psi=None) -> list[np.ndarray]:
-    r"""Unit intensities (n, 2, B) of every ping of every pass at depths d (and :math:`\psi`, default theta's)."""
+def _xi(problem: Problem, xi):
+    r""":math:`\xi` as the render takes it: zeros when not given (the compiled render always has the argument)."""
+    return jnp.zeros(problem.mesh.n_vertices) if xi is None else jnp.asarray(xi, dtype=float)
+
+
+def render(problem: Problem, d, psi=None, xi=None) -> list[np.ndarray]:
+    r"""Unit intensities (n, 2, B) of every ping of every pass at depths d (:math:`\psi` default theta's, :math:`\xi` default 0)."""
     pb = problem
     f = _render_jit(_key(pb))
-    d, psi = jnp.asarray(d), _psi(pb, psi)
+    d, psi, xi = jnp.asarray(d), _psi(pb, psi), _xi(pb, xi)
     out = []
     for poses in pb.poses:
         S = np.zeros((len(poses), 2, pb.n_bins))
         for idx, padded in _chunks(len(poses), pb.chunk):
-            S[idx] = np.asarray(f(d, jnp.asarray(poses[padded]), psi))[: len(idx)]
+            S[idx] = np.asarray(f(d, jnp.asarray(poses[padded]), psi, xi))[: len(idx)]
         out.append(S)
     return out
 
 
-def beam_jacobian(problem: Problem, d, psi=None) -> list[np.ndarray]:
+def beam_jacobian(problem: Problem, d, psi=None, xi=None) -> list[np.ndarray]:
     r"""Per pass (n, 2, B, 2): :math:`\partial S / \partial(\beta_0, \omega)` of each ping-side, with respect to its own side's beam."""
     pb = problem
     f = _beam_jvp_jit(_key(pb))
-    d, psi = jnp.asarray(d), _psi(pb, psi)
+    d, psi, xi = jnp.asarray(d), _psi(pb, psi), _xi(pb, xi)
     out = []
     for poses in pb.poses:
         Jb = np.zeros((len(poses), 2, pb.n_bins, 2))
         for idx, padded in _chunks(len(poses), pb.chunk):
-            Jb[idx] = np.asarray(f(d, jnp.asarray(poses[padded]), psi))[: len(idx)]
+            Jb[idx] = np.asarray(f(d, jnp.asarray(poses[padded]), psi, xi))[: len(idx)]
         out.append(Jb)
     return out
 
 
 @lru_cache(maxsize=8)  # compiled once per problem (hashed by identity); a round uses a few
 def data_term(problem: Problem, warm: bool = False):
-    r"""Jitted :math:`F(S, \hat u_0, \psi)` over all passes: (value, (:math:`\hat u` per pass (n, 2), :math:`\hat\mu` per pair)).
+    r"""Jitted :math:`F(S, \hat u_0, \psi)` over all passes: (value, :math:`\hat u` per pass (n, 2)).
 
     :math:`\hat u_0` and :math:`\psi` may be None (cold modes; theta's :math:`\psi`). With `warm`,
     each ping-side's log-kappa mode starts from
@@ -183,7 +197,6 @@ def data_term(problem: Problem, warm: bool = False):
     ys = [jnp.asarray(y) for y in pb.y]
     labels = [jnp.asarray(lab) for lab in pb.labels]
     valids = [jnp.ones(lab.shape, bool) for lab in labels] if pb.valid is None else [jnp.asarray(v) for v in pb.valid]
-    keys = sorted(pb.pairs)
 
     def side_terms(th, side, y, S, use, lab, val, u0):
         if warm:
@@ -207,68 +220,67 @@ def data_term(problem: Problem, warm: bool = False):
                 total = total + v.sum()
                 us.append(uh)
             u_hats.append(jnp.stack(us, axis=1))
-        mus = []
-        for a, b in keys:
-            v, mu = log_match_factor(pb.pairs[(a, b)], S_list[a], S_list[b], ys[a], ys[b], th, dr)
-            total = total + v
-            mus.append(mu)
-        return total, (u_hats, mus)
+        return total, u_hats
 
     return jax.jit(F)
 
 
-def data_vjp(problem: Problem, d, g_S: list[np.ndarray], psi=None) -> tuple[np.ndarray, np.ndarray]:
-    r"""(:math:`J^\top g_S`, :math:`(\partial S/\partial\psi)^\top g_S`): gradients of :math:`\sum g_S \cdot S(d, \psi)`, chunked over pings."""
+def data_vjp(problem: Problem, d, g_S: list[np.ndarray], psi=None, xi=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    r"""Gradients of :math:`\sum g_S \cdot S(d, \psi, \xi)` in d (n,), :math:`\psi` (2, 3) and :math:`\xi` (n,), chunked over pings."""
     pb = problem
     f = _vjp_jit(_key(pb))
-    d, psi = jnp.asarray(d), _psi(pb, psi)
-    grad, grad_psi = np.zeros(pb.mesh.n_vertices), np.zeros((2, 3))
+    d, psi, xi = jnp.asarray(d), _psi(pb, psi), _xi(pb, xi)
+    grad, grad_psi, grad_xi = np.zeros(pb.mesh.n_vertices), np.zeros((2, 3)), np.zeros(pb.mesh.n_vertices)
     for poses, g in zip(pb.poses, g_S):
         for idx, padded in _chunks(len(poses), pb.chunk):
             gc = np.zeros((pb.chunk, 2, pb.n_bins))
             gc[: len(idx)] = g[idx]
-            gd, gp = f(d, jnp.asarray(poses[padded]), psi, jnp.asarray(gc))
+            gd, gp, gx = f(d, jnp.asarray(poses[padded]), psi, xi, jnp.asarray(gc))
             grad += np.asarray(gd)
             grad_psi += np.asarray(gp)
-    return grad, grad_psi
+            grad_xi += np.asarray(gx)
+    return grad, grad_psi, grad_xi
 
 
 def _args(S, u0, psi):
     return ([jnp.asarray(s) for s in S], None if u0 is None else [jnp.asarray(x) for x in u0], psi)
 
 
-def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None):
-    r""":math:`\ell(d, \beta, \psi)`, its gradient (d, :math:`\beta`), and the data term's details.
+def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None, xi=None):
+    r""":math:`\ell(d, \beta, \psi, \xi)`, its gradient (d, :math:`\beta`), and the data term's details.
 
     F: a `data_term(problem)` to reuse (it is jitted once per problem), or a warm one
     (`data_term(problem, warm=True)`) together with u0, the log-kappa modes to start from;
-    psi: the sonar parameters (2, 3), default theta's. details hold the rendered S,
-    :math:`\hat u` per pass, :math:`\hat\mu` per pair and `grad_psi`, the gradient in :math:`\psi`
-    (including its prior when it is free). S: the render at (d, :math:`\psi`) if already done.
+    psi: the sonar parameters (2, 3), default theta's; xi: the log-reflectivity field (n,),
+    default 0. details hold the rendered S, :math:`\hat u` per pass, the data term's value and its
+    gradient in d (`grad_d_data`), and
+    `grad_psi` and `grad_xi`, the gradients in :math:`\psi` and :math:`\xi` (including their priors
+    when they are unknowns). S: the render at (d, :math:`\psi`, :math:`\xi`) if already done.
     """
     F = data_term(problem) if F is None else F
     psi = _psi(problem, psi)
-    S = render(problem, d, psi) if S is None else S
-    (val, (u_hats, mus)), (g_S, g_psi_F) = jax.value_and_grad(F, argnums=(0, 2), has_aux=True)(*_args(S, u0, psi))
-    grad_d, g_psi_S = data_vjp(problem, d, [np.asarray(g) for g in g_S], psi)
+    S = render(problem, d, psi, xi) if S is None else S
+    (val, u_hats), (g_S, g_psi_F) = jax.value_and_grad(F, argnums=(0, 2), has_aux=True)(*_args(S, u0, psi))
+    grad_d, g_psi_S, g_xi_S = data_vjp(problem, d, [np.asarray(g) for g in g_S], psi, xi)
     gd_prior, gb_prior = problem.prior.grad(np.asarray(d), np.asarray(beta))
     lp_psi, g_psi_prior = problem.psi_log_prior(psi)
-    value = float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta)) + lp_psi
-    details = {"S": S, "u": [np.asarray(u) for u in u_hats], "mu": [float(m) for m in mus], "data": float(val),
-               "grad_psi": np.asarray(g_psi_F) + g_psi_S + g_psi_prior}
+    lp_xi, g_xi_prior = problem.xi_log_prior(_xi(problem, xi))
+    value = float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta)) + lp_psi + lp_xi
+    details = {"S": S, "u": [np.asarray(u) for u in u_hats], "data": float(val), "grad_d_data": grad_d,
+               "grad_psi": np.asarray(g_psi_F) + g_psi_S + g_psi_prior, "grad_xi": g_xi_S + g_xi_prior}
     return value, (grad_d + gd_prior, gb_prior), details
 
 
-def value(problem: Problem, d, beta, F=None, u0=None, psi=None, keep: dict | None = None) -> float:
-    r""":math:`\ell(d, \beta, \psi)` alone: one render and the data term, no gradient (warm with u0, as `value_and_grad`).
+def value(problem: Problem, d, beta, F=None, u0=None, psi=None, keep: dict | None = None, xi=None) -> float:
+    r""":math:`\ell(d, \beta, \psi, \xi)` alone: one render and the data term, no gradient (warm with u0, as `value_and_grad`).
 
     keep: a dict that receives the render as "S", to pass on to `value_and_grad` at the same point.
     """
     F = data_term(problem) if F is None else F
     psi = _psi(problem, psi)
-    S = render(problem, d, psi)
+    S = render(problem, d, psi, xi)
     if keep is not None:
         keep["S"] = S
     val, _ = F(*_args(S, u0, psi))
     return (float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta))
-            + problem.psi_log_prior(psi)[0])
+            + problem.psi_log_prior(psi)[0] + problem.xi_log_prior(_xi(problem, xi))[0])

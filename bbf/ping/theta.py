@@ -68,10 +68,6 @@ class Theta:
     :math:`\epsilon_B + (1 - \epsilon_B) p_\mathrm{fa}` with :math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`.
 
     `z_water` is the world height of the water surface: seabed above it returns no echo.
-
-    `pair_eps` (per side), if given, is the spike chance the match factor uses for a pair's
-    bins instead of `eps`: for averaged bins (`bbf.inference.multiscale.coarsen_theta`) a
-    spike barely moves a mean, so a pair's outlier chance stays that of single bins.
     """
     noise: npt.ArrayLike
     L: float
@@ -91,15 +87,12 @@ class Theta:
     label_fa: float = 0.01
     wc_lit: npt.ArrayLike | None = None
     z_water: float = math.inf
-    pair_eps: npt.ArrayLike | None = None
 
     def __post_init__(self):
         for name in ("noise", "eps", "eta", "zeta", "ell", "log_kappa_mean", "log_kappa_std", "beta0", "omega"):
             object.__setattr__(self, name, _pair(getattr(self, name)))
         if not isinstance(self.gain_db, jax.Array):
             object.__setattr__(self, "gain_db", np.array(self.gain_db, dtype=float).reshape(2, 3))
-        if self.pair_eps is not None:
-            object.__setattr__(self, "pair_eps", _pair(self.pair_eps))
         if self.wc_lit is not None:
             object.__setattr__(self, "wc_lit", np.array(self.wc_lit, dtype=float).reshape(2, -1))
 
