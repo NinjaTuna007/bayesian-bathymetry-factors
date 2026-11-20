@@ -51,9 +51,13 @@ def coarsen_theta(theta: Theta, k: int) -> Theta:
 
 
 def infer_multiscale(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0,
-                     levels=((27, 2, 8), (9, 2, 8), (3, 1, 6), (1, 1, 6)), du: float = DU, n_draws: int = 4000,
+                     levels=((27, 2, 8), (9, 2, 8), (3, 2, 8)), du: float = DU, n_draws: int = 4000,
                      calib_every: int = 50, chunk: int = 32, callback=None, log=print) -> dict:
     r"""Run `infer` at each level (k, rounds, inner GN steps), coarse to fine; returns the last level's result.
+
+    The default stops at :math:`k = 3`: on the Örebro data the seabed speckle stays correlated
+    over 2--3 bins of 1.32 cm (seabed texture along range), so finer bins would count the same
+    information several times as if independent.
 
     The curve is sampled at :math:`\max(du, k\Delta r / 3)`, so coarse levels are also cheap.
     `callback(level_index, k, result)` runs after each level.
