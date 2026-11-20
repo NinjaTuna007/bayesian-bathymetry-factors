@@ -23,6 +23,7 @@ from bbf.inference.calibrate import calibrate
 from bbf.inference.gauss_newton import gauss_newton
 from bbf.inference.init import first_echo
 from bbf.inference.jacobian import ping_side_jacobian
+from bbf.inference.laplace import laplace
 from bbf.inference.objective import Problem, render
 from bbf.io import Pass
 from bbf.match import draw_overlap, project, select_pairs
@@ -50,8 +51,11 @@ def _pair_key(pairs) -> set:
 
 def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0, u, rounds: int = 3,
           inner: int = 10, n_draws: int = 4000, calib_every: int = 50, chunk: int = 32, seed: int = 0,
-          onset: float = 1.5, callback=None, log=print) -> dict:
+          onset: float = 1.5, laplace_samples: int = 0, callback=None, log=print) -> dict:
     """Run the outer loop from (d0, beta0); returns depths, trend, theta, pairs and history.
+
+    With `laplace_samples` > 0, also the Laplace posterior standard deviations of the depths
+    (`sd_d`) and trend (`sd_beta`) at the final mode, from that many Monte Carlo samples.
 
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
@@ -110,4 +114,10 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
             log(f"round {rnd}: matched pairs unchanged; done")
             break
         prev_pairs = key
-    return {"d": d, "beta": beta, "theta": theta, "pairs": pairs, "history": history, "problem": problem}
+    out = {"d": d, "beta": beta, "theta": theta, "pairs": pairs, "history": history, "problem": problem}
+    if laplace_samples > 0 and problem is not None:
+        t0 = time.time()
+        lap = laplace(problem, d, beta, jacobians(problem, d), n_samples=laplace_samples, rng=seed)
+        out.update(sd_d=lap["sd_d"], sd_beta=lap["sd_beta"])
+        log(f"Laplace: depth sd median {np.median(lap['sd_d']):.2f} m in {time.time() - t0:.0f}s")
+    return out

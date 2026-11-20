@@ -9,6 +9,7 @@ from .init import (
     plane_fit,
 )
 from .jacobian import ping_side_jacobian
+from .laplace import laplace, marginal_variances, sample_precision
 from .loop import infer, jacobians, labels_of
 from .multiscale import coarsen_pass, coarsen_theta, infer_multiscale
 from .objective import Problem, data_term, data_vjp, render, value, value_and_grad
@@ -31,11 +32,14 @@ __all__ = [
     "initial_depths",
     "jacobians",
     "labels_of",
+    "laplace",
     "layout",
+    "marginal_variances",
     "mesh_for_passes",
     "ping_side_jacobian",
     "plane_fit",
     "render",
+    "sample_precision",
     "scan_pass",
     "scan_start",
     "value",
