@@ -105,27 +105,60 @@ def echo(theta: Theta, pose, side: int, P, n):
     return B * cos_phi**2 * jnp.exp(-4 * theta.alpha * r) / r**3, r
 
 
-def horizon_visibility(P, s, u, margin: float, tau: float):
-    r"""Visibility :math:`V_k` (K,) of curve samples P (K, 3) from the sonar at s, along one side's curve.
-
-    The ray to a sample lies in the ping plane, as does the curve, so a sample is visible
-    when its elevation angle :math:`\alpha_k = \operatorname{atan2}(z_k - s_z, \lVert q_k - s_{xy} \rVert)`
-    is at least the horizon :math:`H_k = \max \{\alpha_j : u_j \le u_k - \text{margin}\}` cast by
-    the samples closer in:
+def knife_edge(nu):
+    r"""Intensity factor of knife-edge diffraction at Fresnel parameter :math:`\nu` (ITU-R P.526).
 
     .. math::
 
-        V_k = \sigma\bigl((\alpha_k - H_k) / \tau\bigr),
+        J(\nu) = 6.9 + 20 \log_{10}\Bigl(\sqrt{(\nu - 0.1)^2 + 1} + \nu - 0.1\Bigr)\ \mathrm{dB}
+        \quad (\nu > -0.78), \qquad J = 0 \text{ otherwise},
 
-    a step for :math:`\tau = 0`. The margin keeps a sample from being shadowed by its own
-    face. Samples must be ordered outboard by u (K,). Differentiable in P and s for
-    :math:`\tau > 0`, so gradients reach the crest that casts a shadow and the seabed behind it.
+    returned as :math:`10^{-J/10}`: 1 in the open, :math:`\approx 1/4` at grazing incidence
+    (:math:`\nu = 0`), and falling as :math:`\approx 0.05 / \nu^2` deep in shadow.
+    """
+    J = 6.9 + 20 * jnp.log10(jnp.sqrt((nu - 0.1) ** 2 + 1) + nu - 0.1)
+    return jnp.where(nu > -0.78, 10 ** (-J / 10), 1.0)
+
+
+def _running_max(alpha):
+    """Running maximum of alpha (K,) and the index where it was reached."""
+    def pick(a, b):
+        take_b = b[0] >= a[0]
+        return jnp.where(take_b, b[0], a[0]), jnp.where(take_b, b[1], a[1])
+    return jax.lax.associative_scan(pick, (alpha, jnp.arange(alpha.shape[0])))
+
+
+def horizon_visibility(P, s, u, margin: float, wavelength: float):
+    r"""Visibility :math:`V_k` (K,) of curve samples P (K, 3) from the sonar at s, with diffraction.
+
+    The ray to a sample lies in the ping plane, as does the curve. Seen from the sonar,
+    sample :math:`k` has elevation angle
+    :math:`\alpha_k = \operatorname{atan2}(z_k - s_z, \lVert q_k - s_{xy} \rVert)`, and the samples
+    at least `margin` closer cast the horizon :math:`H_k = \alpha_{j^*} = \max_j \alpha_j`. The
+    crest :math:`j^*` sits at distances :math:`d_1 = \lVert P_{j^*} - s \rVert` from the sonar and
+    :math:`d_2 = \lVert P_k - P_{j^*} \rVert` from the sample, and rises
+    :math:`h = d_1 \sin(H_k - \alpha_k)` above the line of sight (negative when the sample is
+    in the open). With wavelength :math:`\lambda`,
+
+    .. math::
+
+        \nu_k = h \sqrt{\frac{2 (d_1 + d_2)}{\lambda d_1 d_2}}, \qquad V_k = \mathrm{knife\_edge}(\nu_k).
+
+    Diffraction makes the shadow edge soft on the scale of the Fresnel zone and leaves a
+    small echo deep in shadow whose relative change with depth stays finite, so gradients
+    reach the crest and the seabed it hides. The margin keeps a sample from being shadowed
+    by its own face. Samples must be ordered outboard by u (K,).
     """
     alpha = jnp.arctan2(P[:, 2] - s[2], jnp.linalg.norm(P[:, :2] - s[:2], axis=-1))
     u = np.asarray(u)
     idx = np.searchsorted(u, u - margin, side="right") - 1  # last sample at least `margin` closer
-    peak = jax.lax.cummax(alpha)
-    horizon = jnp.where(jnp.asarray(idx >= 0), peak[np.maximum(idx, 0)], -math.pi)
-    if tau == 0:
-        return (alpha >= horizon).astype(alpha.dtype)
-    return jax.nn.sigmoid((alpha - horizon) / tau)
+    has = jnp.asarray(idx >= 0)
+    peak, at = _running_max(alpha)
+    j = at[np.maximum(idx, 0)]
+    d1 = jnp.linalg.norm(P[j] - s, axis=-1)
+    # samples without a horizon may coincide with P[j]; keep the norm's gradient finite there
+    gap = jnp.where(has[:, None], P - P[j], 1.0)
+    d2 = jnp.maximum(jnp.linalg.norm(gap, axis=-1), 1e-6)
+    h = d1 * jnp.sin(peak[np.maximum(idx, 0)] - alpha)
+    nu = h * jnp.sqrt(2 * (d1 + d2) / (wavelength * d1 * d2))
+    return jnp.where(has, knife_edge(nu), 1.0)

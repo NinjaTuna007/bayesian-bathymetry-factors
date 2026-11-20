@@ -47,8 +47,9 @@ class Theta:
     The defaults for :math:`\beta_0`, :math:`\omega`, :math:`\alpha` are the PingDSP 3DSS
     values of the prototype (50° below horizontal, 60°, pure water at 450 kHz).
 
-    Shadows: visibility softness :math:`\tau` (`shadow_tau`, rad) and self-shadow margin
-    (`shadow_margin`, m) of `geometry.horizon_visibility`; lit/shadow labels are taken over
+    Shadows: acoustic wavelength :math:`\lambda` (`wavelength`, m; 1480 m/s at 450 kHz) for
+    the knife-edge diffraction and the self-shadow margin (`shadow_margin`, m) of
+    `geometry.horizon_visibility`; lit/shadow labels are taken over
     blocks of `block` bins, and a noise-only block is labelled lit with probability
     `label_fa`.
     """
@@ -64,7 +65,7 @@ class Theta:
     beta0: float = math.radians(50.0)
     omega: float = math.radians(60.0)
     alpha: float = 0.0092
-    shadow_tau: float = 5e-4
+    wavelength: float = 1480.0 / 450e3
     shadow_margin: float = 0.5
     block: int = 8
     label_fa: float = 0.01

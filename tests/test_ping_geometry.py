@@ -94,9 +94,20 @@ def test_echo_zero_for_faces_seen_from_below():
     assert float(a[0]) == 0.0
 
 
-def horizon(m, d, pose, side, u, tau=5e-4, margin=0.5):
+WAVELENGTH = 1480.0 / 450e3
+
+
+def horizon(m, d, pose, side, u, margin=0.5):
     P, _, _ = G.samples(m, d, pose, side, u)
-    return np.asarray(G.horizon_visibility(P, G.pose_frame(pose)[0], u, margin, tau))
+    return np.asarray(G.horizon_visibility(P, G.pose_frame(pose)[0], u, margin, WAVELENGTH))
+
+
+def test_knife_edge_values():
+    """ITU-R P.526 approximation: 0 dB in the open, about 6 dB at grazing, about 13.9 dB at :math:`\nu = 1`."""
+    J = -10 * np.log10(np.asarray(G.knife_edge(jnp.array([-2.0, -0.78, 0.0, 1.0, 10.0]))))
+    np.testing.assert_allclose(J[:3], [0.0, 0.0, 6.03], atol=0.02)
+    assert J[3] == pytest.approx(13.9, abs=0.1)
+    assert J[4] == pytest.approx(6.9 + 20 * np.log10(np.sqrt(9.9**2 + 1) + 9.9), abs=1e-9)
 
 
 def test_flat_seabed_fully_visible(m):
@@ -110,34 +121,29 @@ def test_shadow_behind_ridge(m):
     v = m.vertices
     ridge = np.where(np.abs(v[:, 0] - 15.0) < 1.0, DEPTH - 10.0, DEPTH)  # 10 m wall at x = 15
     u = np.linspace(0.5, 60.0, 600)
-    pose = jnp.array([0, 0, SONAR_Z, 0, 0, 0])
-    for tau in (5e-4, 0.0):
-        V = horizon(m, jnp.asarray(ridge), pose, STARBOARD, u, tau=tau)
-        assert V[u < 13].min() > 0.99
-        # the line of sight over the crest (10 m up at x = 15) meets the seabed at x = 15 · D / 5
-        assert V[(u > 16) & (u < 15 * D / 5 - 1)].max() < 0.01
-        assert V[u > 15 * D / 5 + 1].min() > 0.99
+    V = horizon(m, jnp.asarray(ridge), jnp.array([0, 0, SONAR_Z, 0, 0, 0]), STARBOARD, u)
+    edge = 15 * D / 5  # the line of sight over the crest (10 m up at x = 15) meets the seabed here
+    assert V[u < 13].min() > 0.99
+    assert V[(u > 17) & (u < edge - 4)].max() < 0.01   # deep shadow
+    assert V[np.argmin(np.abs(u - edge))] == pytest.approx(0.25, abs=0.1)  # grazing: about 6 dB
+    assert V[u > edge + 4].min() > 0.99
+    # diffraction leaves a small echo that grows towards the shadow edge
+    deep = V[(u > 20) & (u < edge - 4)]
+    assert deep.min() > 0 and np.all(np.diff(deep) > 0)
 
 
-def test_hard_limit_is_a_step(m):
-    v = m.vertices
-    ridge = np.where(np.abs(v[:, 0] - 15.0) < 1.0, DEPTH - 10.0, DEPTH)
-    V = horizon(m, jnp.asarray(ridge), jnp.array([0, 0, SONAR_Z, 0, 0, 0]), STARBOARD,
-                np.linspace(0.5, 60.0, 600), tau=0.0)
-    assert set(np.unique(V)) <= {0.0, 1.0}
-
-
-def test_visibility_gradient_reaches_the_crest(m):
-    r"""Lowering the crest uncovers seabed behind it: :math:`\partial V / \partial d_\mathrm{crest} > 0` at the shadow's edge."""
+def test_gradient_in_deep_shadow(m):
+    r"""Deep in shadow, :math:`\partial \log V / \partial d` stays finite: lowering the crest uncovers the seabed."""
     v = m.vertices
     crest = np.abs(v[:, 0] - 15.0) < 1.0
     ridge = jnp.asarray(np.where(crest, DEPTH - 10.0, DEPTH))
     u = np.linspace(0.5, 60.0, 600)
     pose = jnp.array([0, 0, SONAR_Z, 0, 0, 0])
-    edge = int(np.argmin(np.abs(u - 15 * D / 5)))  # sample at the shadow's far edge
+    k = int(np.argmin(np.abs(u - 30.0)))  # well inside the shadow
 
-    def V_edge(t):
+    def log_V(t):
         P, _, _ = G.samples(m, ridge + t * jnp.asarray(crest, dtype=float), pose, STARBOARD, u)
-        return G.horizon_visibility(P, G.pose_frame(pose)[0], u, 0.5, 5e-3)[edge]
+        return jnp.log(G.horizon_visibility(P, G.pose_frame(pose)[0], u, 0.5, WAVELENGTH)[k])
 
-    assert float(jax.grad(V_edge)(0.0)) > 0
+    g = float(jax.grad(log_V)(0.0))
+    assert 0.1 < g < 100  # per metre of crest depth

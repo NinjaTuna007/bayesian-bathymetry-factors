@@ -60,7 +60,7 @@ def test_mass_conservation(m, th):
     S = Rn.unit_intensity(m, d, pose, STARBOARD, th, U, N_BINS, DR)
     P, n, inside = G.samples(m, d, pose, STARBOARD, U)
     a, r = G.echo(th, pose, STARBOARD, P, n)
-    a = a * G.horizon_visibility(P, G.pose_frame(pose)[0], U, th.shadow_margin, th.shadow_tau)
+    a = a * G.horizon_visibility(P, G.pose_frame(pose)[0], U, th.shadow_margin, th.wavelength)
     # a sample at x = r / Δr keeps the part of its split that lands on bins 0 .. N-1
     kept = np.clip(N_BINS - np.asarray(r) / DR, 0.0, 1.0)
     w = np.asarray(a * Rn.curve_length(P[:, :2]))
@@ -69,7 +69,7 @@ def test_mass_conservation(m, th):
 
 
 def test_shadow_behind_crest_and_its_gradient(m, th):
-    """Bins behind a crest are dark, and lowering the crest (deeper there) lights the shadow's edge."""
+    """Bins behind a crest are dark, and lowering the crest (deeper there) lights the shadow."""
     v = m.vertices
     x_c = 8.0  # crest 5 m below the sonar; its line of sight meets the seabed at x_c · D / 5
     crest = jnp.asarray((np.abs(v[:, 0] - x_c) < 1.0).astype(float))
@@ -80,7 +80,7 @@ def test_shadow_behind_crest_and_its_gradient(m, th):
     shadow = (r_b > math.hypot(x_c + 2, D) + 0.5) & (r_b < far - 1)
     lit = (r_b > far + 1) & (r_b < N_BINS * DR - 1)
     assert shadow.sum() > 50 and lit.sum() > 50
-    assert S[shadow].max() < 1e-3 * S[lit].mean()
+    assert S[shadow].max() < 0.1 * S[lit].mean()  # diffraction leaves a small echo in shadow
     edge = int(far / DR)
 
     def edge_bins(t):
