@@ -8,8 +8,24 @@ from .factor import (
     mode,
     predicted,
 )
-from .geometry import R_MOUNT, echo, horizon_visibility, pose_frame, samples, trace
+from .geometry import (
+    R_MOUNT,
+    echo,
+    horizon_visibility,
+    knife_edge,
+    pose_frame,
+    samples,
+    trace,
+)
 from .render import DU, curve_length, split_into_bins, u_grid, unit_intensity
+from .shadow import (
+    block_labels,
+    block_mask,
+    lit_probability,
+    log_shadow_factor,
+    log_shadow_side,
+    threshold,
+)
 from .theta import PORT, STARBOARD, SideTheta, Theta
 
 __all__ = [
@@ -20,19 +36,26 @@ __all__ = [
     "SideTheta",
     "Theta",
     "bin_ranges",
+    "block_labels",
+    "block_mask",
     "curve_length",
     "echo",
     "horizon_visibility",
+    "knife_edge",
+    "lit_probability",
     "log_gain",
     "log_gamma",
     "log_mixture",
     "log_ping_factor",
     "log_ping_side",
+    "log_shadow_factor",
+    "log_shadow_side",
     "mode",
     "pose_frame",
     "predicted",
     "samples",
     "split_into_bins",
+    "threshold",
     "trace",
     "u_grid",
     "unit_intensity",
