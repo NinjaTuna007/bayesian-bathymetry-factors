@@ -6,7 +6,7 @@ Usage: python scripts/ping_profile.py PATCHES.npz [--patch A] [--ping 600 ...] [
 PATCHES.npz is the prototype's patch cache (``cache/<bag>_patches.npz``: raw port and
 starboard intensities, interpolated navigation and the 3DSS bathymetry per ping).
 
-1. Seabed: the 3DSS bathymetry points, moved to the world frame with each ping's pose, are
+1. Seabed: the diagnostic 3DSS seabed of `seabed_3dss`: the 3DSS points, moved to the world frame, are
    averaged onto the mesh vertices; vertices without points get the conditional mean of the
    GMRF prior given the others. Depths are measured down from :math:`z_\mathrm{ref}`, the
    median sonar height.
@@ -25,59 +25,16 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
+from prototype_theta import EPS, GAIN_DB, L_SHAPE, NOISE
 from scipy.optimize import minimize
+from seabed_3dss import bathymetry_world, seabed_on_mesh
 
-from bbf import mesh as M
 from bbf import ping as P
-from bbf import prior as PR
-from bbf.io import Pass, load_patch
+from bbf.io import load_patch
 
 jax.config.update("jax_enable_x64", True)
 
-# Calibrated in the prototype (scripts/match_factor.py THETA_*, patch A, 2026-11-18).
-GAIN_DB = np.array([[0.0, 0.65, 0.0], [0.0, 0.0, 4.1]])
-L_SHAPE = 0.48
-NOISE = np.array([9.33e8, 5.28e7])
-EPS = np.array([0.055, 0.021])
-
-H_MESH, BUFFER = 0.5, 5.0
-RHO, SIGMA, SIGMA_OBS = 3.0, 2.0, 0.05  # fill-in prior: range, std, per-point noise (m)
 FIT_EVERY = 100
-
-
-def bathymetry_world(ps: Pass, every: int = 2) -> np.ndarray:
-    """3DSS points of every `every`-th ping in the world frame, (m, 3)."""
-    frames = jax.vmap(P.pose_frame)(jnp.asarray(ps.poses))
-    s, R = np.asarray(frames[0]), np.asarray(frames[1])
-    keep = ps.bathy_ping % every == 0
-    k = ps.bathy_ping[keep]
-    return s[k] + np.einsum("mij,mj->mi", R[k], ps.bathy_xyz[keep])
-
-
-def seabed_on_mesh(world: np.ndarray, z_ref: float) -> tuple[M.Mesh, np.ndarray, np.ndarray]:
-    """Mesh over the points, depths from the points, and the vertices that had points."""
-    lo, hi = world[:, :2].min(0), world[:, :2].max(0)
-    mesh = M.build(lo[0], hi[0], lo[1], hi[1], h=H_MESH, buffer=BUFFER, z_ref=z_ref)
-    q = mesh.to_local(world[:, :2])
-    tri, bary, inside = (np.asarray(a) for a in M.locate(mesh, q))
-    vert = mesh.triangles[tri, np.argmax(bary, axis=1)]
-    depth = z_ref - world[:, 2]
-    # drop points far off a robust plane (water-column detections)
-    A = np.column_stack([q, np.ones(len(q))])
-    coef = np.linalg.lstsq(A[inside], depth[inside], rcond=None)[0]
-    res = depth - A @ coef
-    mad = np.median(np.abs(res[inside]))
-    ok = inside & (np.abs(res) < 10 * mad + 0.5)
-    n = np.bincount(vert[ok], minlength=mesh.n_vertices).astype(float)
-    mean = np.bincount(vert[ok], depth[ok], minlength=mesh.n_vertices) / np.maximum(n, 1)
-    # conditional mean of the GMRF given the vertex averages
-    prior = PR.Prior(mesh, RHO, SIGMA, mu_beta=coef, Sigma_beta=np.eye(3))
-    W = sp.diags(n / SIGMA_OBS**2)
-    rhs = prior.Lambda @ (prior.X @ coef) + W @ mean
-    d = np.asarray(spla.spsolve((prior.Lambda + W).tocsc(), rhs))
-    return mesh, d, n > 0
 
 
 def render_pings(mesh, d, X, idx, n_bins, dr, theta, u):
