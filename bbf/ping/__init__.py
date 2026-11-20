@@ -17,7 +17,14 @@ from .geometry import (
     samples,
     trace,
 )
-from .render import DU, curve_length, split_into_bins, u_grid, unit_intensity
+from .render import (
+    DU,
+    curve_length,
+    split_into_bins,
+    u_grid,
+    unit_intensities,
+    unit_intensity,
+)
 from .shadow import (
     block_labels,
     block_mask,
@@ -58,5 +65,6 @@ __all__ = [
     "threshold",
     "trace",
     "u_grid",
+    "unit_intensities",
     "unit_intensity",
 ]

@@ -15,6 +15,7 @@ its two nearest bins, :math:`w_b(r) = \max(0, 1 - |r / \Delta r - b|)`, so the b
 smoothly with the depths and range timing carries a gradient. The weights of a sample sum
 to one, so the split conserves :math:`\sum_b S_b \Delta r`.
 """
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -59,3 +60,14 @@ def unit_intensity(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: in
     V = G.horizon_visibility(P, G.pose_frame(pose)[0], u, theta.shadow_margin, theta.wavelength)
     w = jnp.where(inside, a * V * curve_length(P[:, :2]), 0.0) / dr
     return split_into_bins(r, w, n_bins, dr)
+
+
+def unit_intensities(mesh: M.Mesh, d, poses, theta: Theta, u, n_bins: int, dr: float):
+    r"""Unit intensities (n, 2, n_bins) of both sides of every pose in poses (n, 6), mesh-local.
+
+    Maps `unit_intensity` over the poses one at a time, so memory stays that of one ping.
+    """
+    poses = jnp.asarray(poses)
+    sides = [jax.lax.map(lambda pose, side=side: unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr), poses)
+             for side in (0, 1)]
+    return jnp.stack(sides, axis=1)
