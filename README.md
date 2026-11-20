@@ -23,7 +23,7 @@ Poses stay outside the graph. Navigation uncertainty is accounted for after the 
 | [`ping/`](ping/README.md) | Ray geometry, predicted intensity, gamma mixture, ping factor |
 | [`match/`](match/README.md) | Overlap, matched bins, match factor |
 | [`inference/`](inference/README.md) | Outer loop over visibility and pairs, Laplace fit, pose uncertainty |
-| [`io/`](io/README.md) | Pings and a navigated trajectory in, depth and covariance out |
+| [`data/`](data/README.md) | Pings and a navigated trajectory in, depth and covariance out |
 
 ## Status
 
