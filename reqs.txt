@@ -2,6 +2,8 @@ numpy
 scipy
 matplotlib
 tqdm
+jax
 rosbags
 pyright
+ruff
 pytest

@@ -18,12 +18,12 @@ Poses stay outside the graph. Navigation uncertainty is accounted for after the 
 
 | Path | Will hold |
 |---|---|
-| [`mesh/`](mesh/README.md) | Survey mesh, hat functions, depth interpolation |
-| [`prior/`](prior/README.md) | Trend prior and the Matérn precision on the vertices |
-| [`ping/`](ping/README.md) | Ray geometry, predicted intensity, gamma mixture, ping factor |
-| [`match/`](match/README.md) | Overlap, matched bins, match factor |
-| [`inference/`](inference/README.md) | Outer loop over visibility and pairs, Laplace fit, pose uncertainty |
-| [`data/`](data/README.md) | Pings and a navigated trajectory in, depth and covariance out |
+| [`bbf/mesh/`](bbf/mesh/README.md) | Survey mesh, hat functions, depth interpolation |
+| [`bbf/prior/`](bbf/prior/README.md) | Trend prior and the Matérn precision on the vertices |
+| [`bbf/ping/`](bbf/ping/README.md) | Ray geometry, predicted intensity, gamma mixture, ping factor |
+| [`bbf/match/`](bbf/match/README.md) | Overlap, matched bins, match factor |
+| [`bbf/inference/`](bbf/inference/README.md) | Outer loop over visibility and pairs, Laplace fit, pose uncertainty |
+| [`bbf/data/`](bbf/data/README.md) | Pings and a navigated trajectory in, depth and covariance out |
 
 ## Data
 
