@@ -24,8 +24,8 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
                  max_iter: int = 10, tol: float = 1e-5, lam: float = 1e-3, max_tries: int = 10, log=print):
     r"""Ascend :math:`\ell` from (d, :math:`\beta`, :math:`\psi`, :math:`\xi`); returns (d, :math:`\beta`, :math:`\psi`, :math:`\xi`, history).
 
-    J: frozen per-ping-side Jacobians J[p][t][c] (with the :math:`\xi` columns when the problem has
-    the field); Jb: frozen beam derivatives of S (`objective.beam_jacobian`), needed when
+    J: frozen per-ping-side Jacobians J[p][t][c], taken at the start (with the :math:`\xi` columns
+    when the problem has the field, and then rescaled with :math:`S` as it moves, see `ggn.assemble`); Jb: frozen beam derivatives of S (`objective.beam_jacobian`), needed when
     :math:`\psi` is free; psi, xi: their starts (default theta's; zero). hold_depths: keep
     (d, :math:`\beta`) where they are and fit the rest, e.g. the reflectivity a seabed implies.
     Stops after `max_iter` accepted steps, when an accepted step raises :math:`\ell` by less than
@@ -45,11 +45,12 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     ell, (gd, gb), det = value_and_grad(problem, d, beta, F, psi=psi, xi=xi)
     if not np.isfinite(ell):
         raise FloatingPointError(f"log posterior is {ell} at the start")
+    S0 = det["S"] if field else None  # J is taken at the start: with the field its rows follow S (`ggn.assemble`)
     history: list[dict] = [{"ell": ell, "lam": lam, "step": 0.0, "time": 0.0}]
     log(f"  GN start: ell = {ell:.1f}")
     for it in range(max_iter):
         t0 = time.time()
-        H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi)
+        H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, S0=S0)
         g = np.zeros(lay["size"])
         g[:n], g[ib:ib + 3] = gd, gb
         if field:
@@ -67,7 +68,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             damp[ip:] = 0.0
             Hd = sp.csc_matrix(H + sp.diags(damp))
             if hold_depths:
-                Hd = sp.csc_matrix(Hd[move][:, move])
+                Hd = sp.csc_matrix(sp.csr_matrix(Hd[:, move])[move])
             try:
                 delta = np.zeros(lay["size"])
                 delta[move] = cho_factor(Hd).solve(g[move])

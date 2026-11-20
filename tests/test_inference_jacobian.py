@@ -63,6 +63,9 @@ def test_field_jacobian_matches_jvp(scene, side):
                      (jnp.asarray(dv), jnp.asarray(dx)))
     jvp = np.asarray(jvp)
     np.testing.assert_allclose(J @ np.concatenate([dv, dx]), jvp, rtol=1e-6, atol=1e-8 * np.abs(jvp).max())
+    # a uniform step of the field scales every row with S: what `ggn.assemble` relies on to rescale frozen rows
+    Js = ping_side_jacobian(m, d, pose, side, th, u, N_BINS, DR, xi=xi + 0.7)
+    np.testing.assert_allclose(Js.toarray(), np.exp(0.7) * J.toarray(), rtol=1e-9, atol=1e-300)
     tilted = jnp.array([0.0, 0.3, SONAR_Z, 0.03, 0.05, 0.2])
     Jt = ping_side_jacobian(m, d, tilted, side, th, u, N_BINS, DR, xi=xi)
     _, jvp = jax.jvp(lambda xx: P.unit_intensity(m, d, tilted, side, th, u, N_BINS, DR, xx), (xi,), (jnp.asarray(dx),))

@@ -104,13 +104,18 @@ def shadow_rows(problem: Problem, S, u_hat):
     return out
 
 
-def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None) -> sp.csc_matrix:
+def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None, S0=None) -> sp.csc_matrix:
     r"""The augmented GGN matrix :math:`H` (size from `layout`), symmetric positive semidefinite plus priors.
 
     J[p][t][c]: the frozen Jacobian of pass p, ping t, side c, (B, n) or (B, 2n) with the field.
     S, u_hat: the data term's rendered intensities and :math:`\hat u` per pass (n, 2).
     psi: the sonar parameters (2, 3) the weights are taken at (default theta's); Jb: per pass
     (n, 2, B, 2) beam derivatives of S (`objective.beam_jacobian`), needed when :math:`\psi` is free.
+
+    S0: the render J and Jb were taken at. With it their rows are rescaled by :math:`S_b / S_{0,b}`,
+    which freezes :math:`\partial \log S_b` instead of :math:`\partial S_b`. The reflectivity multiplies
+    :math:`S`, so as :math:`\xi` moves by :math:`\delta` over a bin's footprint the bin's derivatives all
+    grow by :math:`e^{\delta}`, and so does :math:`S_b`: the rescaled rows follow, the frozen ones do not.
     """
     if psi is not None:
         problem = dataclasses.replace(problem, theta=with_psi(problem.theta, psi))
@@ -148,6 +153,12 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
             raise ValueError(f"Jacobian has {Jp.get_shape()[1]} columns, the problem {nf} field variables")
         w, a_, c_ = W.ravel(), a.ravel(), c.ravel()
         row = np.arange(len(w))
+        scale = np.ones(len(w))
+        if S0 is not None:
+            s_now, s_then = S[p].ravel(), S0[p].ravel()
+            ok = (s_now > 0) & (s_then > 0)
+            scale = np.where(ok, np.clip(s_now / np.where(ok, s_then, 1.0), 1e-3, 1e3), 1.0)
+            Jp = sp.csr_matrix(sp.diags(scale) @ Jp)
         ps = row // nbin  # ping-side of each row
         u0 = lay["u_pass"][p]
         # ping bins: field-field, field-u, u-u
@@ -166,7 +177,7 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
         if free:
             # psi columns of each bin, in its own side's three: :math:`a\,\partial S/\partial(\beta_0, \omega)` and :math:`\partial \log g/\partial g_1`
             own = np.repeat(np.eye(2, dtype=bool)[ps % 2], 3, axis=1)  # (rows, 6): the bin's side's columns
-            dS = np.where(own, np.tile(np.column_stack([Jbs[p].reshape(-1, 2), np.zeros(len(w))]), 2), 0.0)
+            dS = np.where(own, np.tile(np.column_stack([scale[:, None] * Jbs[p].reshape(-1, 2), np.zeros(len(w))]), 2), 0.0)
             Gp = a_[:, None] * dS + np.where(own, np.tile(np.tile(kg, n_ps)[:, None], 6), 0.0) * [0, 0, 1, 0, 0, 1]
             H_fpsi += Jp.T @ ((w * a_)[:, None] * Gp)
             H_xpsi[u0 - nf: u0 - nf + n_ps] += np.column_stack([np.bincount(ps, w * c_ * Gp[:, k], n_ps) for k in range(6)])

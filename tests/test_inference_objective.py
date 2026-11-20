@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import scipy.sparse as sp
 
 from bbf import match as Mt
 from bbf import mesh as M
@@ -242,6 +243,14 @@ def test_ggn_matches_weighted_jacobian_products(problem):
         flat[lay["psi"]:] += zf[lay["psi"]:] / sd.ravel() ** 2
         Hz = H @ zf
         np.testing.assert_allclose(Hz, flat, rtol=1e-6, atol=1e-8 * np.abs(flat).max())
+    # rows rescaled by S / S0: nothing at the render J was taken at, the factor squared after a uniform step of xi
+    scale = abs(H).max()
+    same = sp.csr_matrix(ggn.assemble(pbf, J, S, u_hat, Jb=Jb, psi=psi, S0=S) - H)
+    np.testing.assert_allclose(same.data, 0.0, atol=1e-9 * scale)
+    S2 = [np.exp(0.5) * s for s in S]
+    u2 = [u - 0.5 for u in u_hat]  # the same predicted intensities, so the same weights
+    H2 = ggn.assemble(pbf, J, S2, u2, Jb=Jb, psi=psi, S0=S)
+    np.testing.assert_allclose(sp.csr_matrix(H2 - H)[:nf, :nf].data, 0.0, atol=1e-9 * scale)
     # without the field the same assembly has no xi block
     plain = dataclasses.replace(pbf, refl=None)
     assert ggn.layout(plain)["nf"] == n

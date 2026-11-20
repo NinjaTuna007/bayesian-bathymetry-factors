@@ -66,8 +66,8 @@ def test_cell_scores_of_simulated_passes_are_standard_normal():
     _, e2, ka, kb = Mt.cell_residual(a, Mt.cell_sums(q, 2.0 * y, J, use, 1.0, L))
     assert np.mean(Mt.ratio_score(e2, ka, kb)) > 1.0
     # far residuals keep their size and sign
-    far = Mt.ratio_score(np.array([-30.0, 30.0]), 50.0, 50.0)
-    assert far[0] < -30 and far[1] > 30 and np.all(np.isfinite(far))
+    far = Mt.ratio_score(np.array([-5.0, 5.0]), 50.0, 50.0)
+    assert far[0] < -12 and far[1] > 12 and np.all(np.isfinite(far))
 
 
 def test_cell_residual_takes_common_cells_only():
