@@ -31,6 +31,7 @@ from .shadow import (
     lit_probability,
     log_shadow_factor,
     log_shadow_side,
+    ping_use,
     threshold,
 )
 from .theta import PORT, STARBOARD, SideTheta, Theta
@@ -58,6 +59,7 @@ __all__ = [
     "log_shadow_factor",
     "log_shadow_side",
     "mode",
+    "ping_use",
     "pose_frame",
     "predicted",
     "samples",

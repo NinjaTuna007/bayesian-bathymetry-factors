@@ -92,3 +92,14 @@ def log_shadow_factor(mesh: M.Mesh, d, pose, labels, theta: Theta, u, dr: float,
         S = Rn.unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr)
         total = total + log_shadow_side(theta, side, labels[side], S, log_kappa[side])
     return total
+
+
+def ping_use(labels, n_bins: int, block: int, matched=None):
+    """Bins (2, n_bins) the ping factor scores: those in lit blocks, minus matched bins.
+
+    labels: (2, n_blocks) from `block_labels`; matched: (2, n_bins) bins taken by the match
+    factor (default none). Shadow blocks are scored by the shadow factor instead, and
+    matched bins by the match factor, so each intensity enters one likelihood term.
+    """
+    use = np.stack([np.asarray(block_mask(labels[c], n_bins, block)) for c in (0, 1)])
+    return use if matched is None else use & ~np.asarray(matched, dtype=bool)

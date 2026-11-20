@@ -82,3 +82,14 @@ def test_shadow_factor_raises_seabed_behind_crest(wall_scene):
     g = np.asarray(jax.grad(f)(d_model))
     # shallower seabed behind the crest explains the lit blocks: the gradient there is negative
     assert g[behind].sum() < 0
+
+
+def test_ping_use_combines_labels_and_matched():
+    labels = np.array([[True, False, True], [False, True, True]])
+    matched = np.zeros((2, 26), bool)
+    matched[0, 1] = True
+    use = Sh.ping_use(labels, 26, 8, matched)
+    assert use.shape == (2, 26)
+    np.testing.assert_array_equal(use[0, :8], [True, False] + [True] * 6)
+    assert not use[0, 8:16].any() and use[0, 16:24].all() and not use[:, 24:].any()
+    assert not use[1, :8].any() and use[1, 8:24].all()

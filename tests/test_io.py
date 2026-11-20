@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from bbf.io import Pass, load_patch
+from bbf import mesh as M
+from bbf.io import Pass, load_depths, load_patch, save_depths
 
 
 def write_cache(path, rng):
@@ -41,3 +42,13 @@ def test_missing_patch(tmp_path):
     write_cache(tmp_path / "c.npz", np.random.default_rng(0))
     with pytest.raises(KeyError):
         load_patch(tmp_path / "c.npz", "C")
+
+
+def test_depths_roundtrip(tmp_path):
+    m = M.build(0.0, 10.0, 0.0, 5.0, h=1.0, z_ref=56.4)
+    d = np.random.default_rng(0).normal(size=m.n_vertices)
+    save_depths(tmp_path / "d.npz", m, d, beta=np.array([1.0, 2.0, 3.0]))
+    m2, d2, extra = load_depths(tmp_path / "d.npz")
+    assert m2 == m
+    np.testing.assert_array_equal(d2, d)
+    np.testing.assert_array_equal(extra["beta"], [1.0, 2.0, 3.0])

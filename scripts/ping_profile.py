@@ -30,7 +30,7 @@ from scipy.optimize import minimize
 from seabed_3dss import bathymetry_world, seabed_on_mesh
 
 from bbf import ping as P
-from bbf.io import load_patch
+from bbf.io import load_depths, load_patch
 
 jax.config.update("jax_enable_x64", True)
 
@@ -85,6 +85,8 @@ def main():
     ap.add_argument("--patch", default="A")
     ap.add_argument("--ping", type=int, nargs="+", default=[600], help="pings to plot, one figure each")
     ap.add_argument("--out-dir", type=Path, default=Path("figs"), help="writes ping_profile_<ping>.png")
+    ap.add_argument("--depths", type=Path, help="seabed from a save_depths file (e.g. an inference result) "
+                    "instead of the diagnostic 3DSS seabed")
     args = ap.parse_args()
 
     ps = load_patch(args.patches, args.patch)
@@ -92,10 +94,15 @@ def main():
     r_bin = np.asarray(P.bin_ranges(n_bins, dr))
     z_ref = float(np.median(ps.poses[:, 2]))
 
-    world = bathymetry_world(ps)
-    mesh, d, seen = seabed_on_mesh(world, z_ref)
-    print(f"mesh {mesh.n_vertices} vertices, {seen.mean():.0%} with 3DSS points; "
-          f"depth {np.percentile(d[seen], 1):.1f}–{np.percentile(d[seen], 99):.1f} m below z_ref = {z_ref:.2f}")
+    if args.depths is not None:
+        mesh, d, _ = load_depths(args.depths)
+        source = args.depths.stem
+        print(f"seabed from {args.depths}: {mesh.n_vertices} vertices, z_ref = {mesh.z_ref:.2f}")
+    else:
+        mesh, d, seen = seabed_on_mesh(bathymetry_world(ps), z_ref)
+        source = "3DSS seabed"
+        print(f"mesh {mesh.n_vertices} vertices, {seen.mean():.0%} with 3DSS points; "
+              f"depth {np.percentile(d[seen], 1):.1f}–{np.percentile(d[seen], 99):.1f} m below z_ref = {z_ref:.2f}")
     X_local = ps.local_poses(mesh.origin)
 
     idx = np.arange(0, ps.n_pings, FIT_EVERY)
@@ -118,16 +125,22 @@ def main():
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for i in args.ping:
         out = args.out_dir / f"ping_profile_{i}.png"
-        plot_ping(int(np.flatnonzero(idx == i)[0]), i, y, S, r_bin, dr, theta, out)
+        plot_ping(int(np.flatnonzero(idx == i)[0]), i, y, S, r_bin, dr, theta, out, source)
         print(f"wrote {out}")
 
 
-def plot_ping(k, i, y, S, r_bin, dr, theta, out):
-    """Measured, predicted and spike means along range, both sides of ping i (row k of y, S)."""
+def plot_ping(k, i, y, S, r_bin, dr, theta, out, source):
+    r"""Measured, predicted and spike means along range, both sides of ping i (row k of y, S).
+
+    :math:`\hat\kappa` is the Laplace mode over the bins the ping factor scores (lit blocks);
+    blocks labelled shadow are shaded.
+    """
     n_bins = y.shape[-1]
+    labels = np.stack([P.block_labels(y[k, c], theta, c, dr) for c in (0, 1)])
+    use = P.ping_use(labels, n_bins, theta.block)
     I_bar, I_sp = np.zeros((2, n_bins)), np.zeros((2, n_bins))
     for c in (0, 1):
-        u_hat, _ = P.mode(theta, c, dr, jnp.asarray(y[k, c]), jnp.asarray(S[k, c]), jnp.ones(n_bins, bool))
+        u_hat, _ = P.mode(theta, c, dr, jnp.asarray(y[k, c]), jnp.asarray(S[k, c]), jnp.asarray(use[c]))
         I_bar[c], I_sp[c] = (np.asarray(v) for v in P.predicted(jnp.asarray(S[k, c]), u_hat, theta, c, dr))
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
     for c, name in ((P.PORT, "port"), (P.STARBOARD, "starboard")):
@@ -135,9 +148,11 @@ def plot_ping(k, i, y, S, r_bin, dr, theta, out):
         ax.semilogy(r_bin, np.maximum(y[k, c], 1), lw=0.3, color="0.6", label="measured $y$")
         ax.semilogy(r_bin, I_bar[c], color="C3", lw=1.2, label=r"predicted $\bar I = g(\hat\kappa S + N)$")
         ax.semilogy(r_bin, I_sp[c], color="C1", lw=0.8, ls=":", label="spike component mean")
+        ax.fill_between(r_bin, 0, 1, where=~use[c], transform=ax.get_xaxis_transform(), color="0.85",
+                        step="mid", lw=0, zorder=0, label="labelled shadow")
         first = np.flatnonzero(S[k, c] > 0)
         if len(first):
-            ax.axvline(r_bin[first[0]], color="C0", ls="--", lw=0.8, label="rendered first return (3DSS seabed)")
+            ax.axvline(r_bin[first[0]], color="C0", ls="--", lw=0.8, label=f"rendered first return ({source})")
         ax.set_title(f"ping {i}, {name}")
         ax.set_xlabel("slant range (m)")
         ax.legend(fontsize=8)
