@@ -25,6 +25,14 @@ Poses stay outside the graph. Navigation uncertainty is accounted for after the 
 | [`inference/`](inference/README.md) | Outer loop over visibility and pairs, Laplace fit, pose uncertainty |
 | [`data/`](data/README.md) | Pings and a navigated trajectory in, depth and covariance out |
 
+## Data
+
+Set `SSS_DATA` to the directory holding the `rosbag2_*` survey bags, e.g. in an untracked `.env`:
+
+    SSS_DATA=/path/to/bags
+
+`.envrc` loads it under direnv. Without direnv, export it yourself.
+
 ## Status
 
 Empty on purpose. A tagged release will be the first version that runs.
