@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""Range profile of one ping under the bbf ping factor, rebuilt from the prototype's figure.
 
-Usage: python scripts/ping_profile.py PATCHES.npz [--patch A] [--ping 600] [--out figs/ping_profile.png]
+Usage: python scripts/ping_profile.py PATCHES.npz [--patch A] [--ping 600 ...] [--out-dir figs]
 
 PATCHES.npz is the prototype's patch cache (``cache/<bag>_patches.npz``: raw port and
 starboard intensities, interpolated navigation and the 3DSS bathymetry per ping).
@@ -137,8 +137,8 @@ def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     ap.add_argument("patches", type=Path)
     ap.add_argument("--patch", default="A")
-    ap.add_argument("--ping", type=int, default=600)
-    ap.add_argument("--out", type=Path, default=Path("figs/ping_profile.png"))
+    ap.add_argument("--ping", type=int, nargs="+", default=[600], help="pings to plot, one figure each")
+    ap.add_argument("--out-dir", type=Path, default=Path("figs"), help="writes ping_profile_<ping>.png")
     args = ap.parse_args()
 
     p = load_patch(args.patches, args.patch)
@@ -155,8 +155,7 @@ def main():
     X_local[:, :2] = mesh.to_local(X[:, :2])
 
     idx = np.arange(0, len(X), FIT_EVERY)
-    if args.ping not in idx:
-        idx = np.sort(np.append(idx, args.ping))
+    idx = np.union1d(idx, args.ping)
     y = np.stack([np.stack([p["port"][i], p["starboard"][i]]).astype(float) ** 2 for i in idx])
     u = P.u_grid(n_bins, dr)
     base = P.Theta(noise=NOISE, L=L_SHAPE, eps=EPS, eta=1.0, zeta=1.0, ell=1.0, log_kappa_mean=0.0,
@@ -172,9 +171,16 @@ def main():
           f"eta {theta.eta}, zeta {theta.zeta}, ell {theta.ell} m, "
           f"log kappa {theta.log_kappa_mean} ± {theta.log_kappa_std}")
 
-    # predicted and spike means of the plotted ping at the Laplace mode
-    k = int(np.flatnonzero(idx == args.ping)[0])
-    i = idx[k]
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    for i in args.ping:
+        out = args.out_dir / f"ping_profile_{i}.png"
+        plot_ping(int(np.flatnonzero(idx == i)[0]), i, y, S, r_bin, dr, theta, out)
+        print(f"wrote {out}")
+
+
+def plot_ping(k, i, y, S, r_bin, dr, theta, out):
+    """Measured, predicted and spike means along range, both sides of ping i (row k of y, S)."""
+    n_bins = y.shape[-1]
     I_bar, I_sp = np.zeros((2, n_bins)), np.zeros((2, n_bins))
     for c in (0, 1):
         u_hat, _ = P.mode(theta, c, dr, jnp.asarray(y[k, c]), jnp.asarray(S[k, c]), jnp.ones(n_bins, bool))
@@ -192,9 +198,8 @@ def main():
         ax.set_xlabel("slant range (m)")
         ax.legend(fontsize=8)
     fig.tight_layout()
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(args.out, dpi=130)
-    print(f"wrote {args.out}")
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
