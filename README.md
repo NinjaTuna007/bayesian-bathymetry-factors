@@ -23,7 +23,7 @@ Poses stay outside the graph. Navigation uncertainty is accounted for after the 
 | [`bbf/ping/`](bbf/ping/README.md) | Ray geometry, predicted intensity, gamma mixture, ping factor |
 | [`bbf/match/`](bbf/match/README.md) | Overlap, matched bins, match factor |
 | [`bbf/inference/`](bbf/inference/README.md) | Outer loop over visibility and pairs, Laplace fit, pose uncertainty |
-| [`bbf/data/`](bbf/data/README.md) | Pings and a navigated trajectory in, depth and covariance out |
+| [`bbf/io/`](bbf/io/README.md) | Pings and a navigated trajectory in, depth and covariance out |
 
 ## Data
 
@@ -35,4 +35,4 @@ Set `SSS_DATA` to the directory holding the `rosbag2_*` survey bags, e.g. in an 
 
 ## Status
 
-Mesh and prior implemented; the ping and match factors, inference and data are still placeholders. A tagged release will be the first version that runs.
+Mesh and prior implemented; the ping and match factors, inference and io are still placeholders. A tagged release will be the first version that runs.
