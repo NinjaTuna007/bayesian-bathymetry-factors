@@ -13,7 +13,7 @@ starboard intensities, interpolated navigation and the 3DSS bathymetry per ping)
 2. :math:`\theta`: :math:`L`, :math:`N_c`, :math:`\epsilon_c` and the gain are the
    prototype's calibrated values. :math:`\eta_c`, :math:`\zeta_c`, :math:`\ell_c` are fitted
    by maximum likelihood over every 100th ping together with one :math:`\log\kappa` per ping
-   and side, at the fixed seabed and visibility; the prior on :math:`\log\kappa` is set from
+   and side, at the fixed seabed; the prior on :math:`\log\kappa` is set from
    those fits.
 3. Figure: measured and predicted intensity along range for both sides of one ping, with
    :math:`\bar I` at the Laplace mode of :math:`\log\kappa`, and the distribution of
@@ -98,16 +98,14 @@ def seabed_on_mesh(world: np.ndarray, z_ref: float) -> tuple[M.Mesh, np.ndarray,
 
 
 def render_pings(mesh, d, X, idx, n_bins, dr, theta, u):
-    """Unit intensities (len(idx), 2, n_bins) and visibility masks at the fixed seabed."""
+    """Unit intensities (len(idx), 2, n_bins) at the fixed seabed, shadows included."""
     S = np.zeros((len(idx), 2, n_bins))
     dj = jnp.asarray(d)
-    render = jax.jit(lambda pose, side, vis: P.unit_intensity(mesh, dj, pose, side, theta, u, n_bins, dr, vis),
+    render = jax.jit(lambda pose, side: P.unit_intensity(mesh, dj, pose, side, theta, u, n_bins, dr),
                      static_argnums=1)
     for k, i in enumerate(idx):
-        pose = jnp.asarray(X[i])
         for side in (P.PORT, P.STARBOARD):
-            vis = jnp.asarray(P.visibility(mesh, dj, pose, side, u))
-            S[k, side] = np.asarray(render(pose, side, vis))
+            S[k, side] = np.asarray(render(jnp.asarray(X[i]), side))
     return S
 
 

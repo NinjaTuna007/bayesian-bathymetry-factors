@@ -8,7 +8,7 @@ from .factor import (
     mode,
     predicted,
 )
-from .geometry import R_MOUNT, echo, pose_frame, samples, trace, visibility
+from .geometry import R_MOUNT, echo, horizon_visibility, pose_frame, samples, trace
 from .render import DU, curve_length, split_into_bins, u_grid, unit_intensity
 from .theta import PORT, STARBOARD, SideTheta, Theta
 
@@ -22,6 +22,7 @@ __all__ = [
     "bin_ranges",
     "curve_length",
     "echo",
+    "horizon_visibility",
     "log_gain",
     "log_gamma",
     "log_mixture",
@@ -35,5 +36,4 @@ __all__ = [
     "trace",
     "u_grid",
     "unit_intensity",
-    "visibility",
 ]

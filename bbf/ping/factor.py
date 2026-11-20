@@ -123,17 +123,16 @@ def log_ping_side(theta: Theta, side: int, dr: float, y, S, use=None):
     return F(u_hat) + 0.5 * math.log(2 * math.pi) - 0.5 * jnp.log(H)
 
 
-def log_ping_factor(mesh: M.Mesh, d, pose, y, theta: Theta, u, dr: float, vis=None, use=None):
+def log_ping_factor(mesh: M.Mesh, d, pose, y, theta: Theta, u, dr: float, use=None):
     r"""Log ping factor :math:`\log p(y_t \mid d, x_t)`, summed over port and starboard.
 
     y: (2, n_bins) measured intensities (amplitude squared); u: horizontal curve samples
-    (K,); vis: (2, K) visibility per sample (default all visible); use: (2, n_bins) bins
-    to include (default all). Differentiable in d and the pose.
+    (K,); use: (2, n_bins) bins to include (default all). Differentiable in d and the pose.
     """
     y = jnp.asarray(y)
     n_bins = y.shape[-1]
     total = 0.0
     for side in (0, 1):
-        S = Rn.unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr, None if vis is None else vis[side])
+        S = Rn.unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr)
         total = total + log_ping_side(theta, side, dr, y[side], S, None if use is None else use[side])
     return total

@@ -60,6 +60,7 @@ def test_mass_conservation(m, th):
     S = Rn.unit_intensity(m, d, pose, STARBOARD, th, U, N_BINS, DR)
     P, n, inside = G.samples(m, d, pose, STARBOARD, U)
     a, r = G.echo(th, pose, STARBOARD, P, n)
+    a = a * G.horizon_visibility(P, G.pose_frame(pose)[0], U, th.shadow_margin, th.shadow_tau)
     # a sample at x = r / Δr keeps the part of its split that lands on bins 0 .. N-1
     kept = np.clip(N_BINS - np.asarray(r) / DR, 0.0, 1.0)
     w = np.asarray(a * Rn.curve_length(P[:, :2]))
@@ -67,14 +68,25 @@ def test_mass_conservation(m, th):
     assert float(S.sum() * DR) == pytest.approx(expect, rel=1e-10)
 
 
-def test_visibility_mask_removes_samples(m, th):
-    d = jnp.full(m.n_vertices, DEPTH)
-    vis = np.asarray(U) < 20.0
-    S_all = Rn.unit_intensity(m, d, LEVEL, PORT, th, U, N_BINS, DR)
-    S_vis = Rn.unit_intensity(m, d, LEVEL, PORT, th, U, N_BINS, DR, vis=vis)
-    cut = math.hypot(20.0, D) / DR
-    np.testing.assert_allclose(S_vis[: int(cut) - 1], S_all[: int(cut) - 1])
-    assert float(jnp.abs(S_vis[int(cut) + 2:]).max()) == 0.0
+def test_shadow_behind_crest_and_its_gradient(m, th):
+    """Bins behind a crest are dark, and lowering the crest (deeper there) lights the shadow's edge."""
+    v = m.vertices
+    x_c = 8.0  # crest 5 m below the sonar; its line of sight meets the seabed at x_c · D / 5
+    crest = jnp.asarray((np.abs(v[:, 0] - x_c) < 1.0).astype(float))
+    d = jnp.full(m.n_vertices, DEPTH) - 10.0 * crest
+    S = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, th, U, N_BINS, DR))
+    r_b = np.arange(N_BINS) * DR
+    far = math.hypot(x_c * D / 5, D)
+    shadow = (r_b > math.hypot(x_c + 2, D) + 0.5) & (r_b < far - 1)
+    lit = (r_b > far + 1) & (r_b < N_BINS * DR - 1)
+    assert shadow.sum() > 50 and lit.sum() > 50
+    assert S[shadow].max() < 1e-3 * S[lit].mean()
+    edge = int(far / DR)
+
+    def edge_bins(t):
+        return Rn.unit_intensity(m, d + t * crest, LEVEL, STARBOARD, th, U, N_BINS, DR)[edge - 5:edge + 5].sum()
+
+    assert float(jax.grad(edge_bins)(0.0)) > 0
 
 
 def test_gradient_wrt_depth_and_pose(m, th):

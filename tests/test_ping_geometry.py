@@ -1,5 +1,6 @@
 import math
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -93,16 +94,50 @@ def test_echo_zero_for_faces_seen_from_below():
     assert float(a[0]) == 0.0
 
 
-def test_visibility_shadow_behind_ridge(m):
+def horizon(m, d, pose, side, u, tau=5e-4, margin=0.5):
+    P, _, _ = G.samples(m, d, pose, side, u)
+    return np.asarray(G.horizon_visibility(P, G.pose_frame(pose)[0], u, margin, tau))
+
+
+def test_flat_seabed_fully_visible(m):
+    u = np.linspace(0.5, 40.0, 400)
+    for side in (PORT, STARBOARD):
+        V = horizon(m, jnp.full(m.n_vertices, DEPTH), jnp.array([0, 0, SONAR_Z, 0, 0, 0]), side, u)
+        assert V.min() > 0.99
+
+
+def test_shadow_behind_ridge(m):
     v = m.vertices
     ridge = np.where(np.abs(v[:, 0] - 15.0) < 1.0, DEPTH - 10.0, DEPTH)  # 10 m wall at x = 15
-    u = jnp.linspace(0.5, 40.0, 80)
+    u = np.linspace(0.5, 60.0, 600)
     pose = jnp.array([0, 0, SONAR_Z, 0, 0, 0])
-    vis = G.visibility(m, jnp.asarray(ridge), pose, STARBOARD, u)
-    flat = G.visibility(m, jnp.full(m.n_vertices, DEPTH), pose, STARBOARD, u)
-    assert flat.all()
-    uu = np.asarray(u)
-    assert vis[uu < 13].all()
-    # the ray over the wall top (10 m up at x = 16) grazes it: shadow down to x = 16 · D / 5
-    assert not vis[(uu > 18) & (uu < 16 * D / 5 - 1)].any()
-    assert vis[uu > 16 * D / 5 + 1].all()
+    for tau in (5e-4, 0.0):
+        V = horizon(m, jnp.asarray(ridge), pose, STARBOARD, u, tau=tau)
+        assert V[u < 13].min() > 0.99
+        # the line of sight over the crest (10 m up at x = 15) meets the seabed at x = 15 · D / 5
+        assert V[(u > 16) & (u < 15 * D / 5 - 1)].max() < 0.01
+        assert V[u > 15 * D / 5 + 1].min() > 0.99
+
+
+def test_hard_limit_is_a_step(m):
+    v = m.vertices
+    ridge = np.where(np.abs(v[:, 0] - 15.0) < 1.0, DEPTH - 10.0, DEPTH)
+    V = horizon(m, jnp.asarray(ridge), jnp.array([0, 0, SONAR_Z, 0, 0, 0]), STARBOARD,
+                np.linspace(0.5, 60.0, 600), tau=0.0)
+    assert set(np.unique(V)) <= {0.0, 1.0}
+
+
+def test_visibility_gradient_reaches_the_crest(m):
+    r"""Lowering the crest uncovers seabed behind it: :math:`\partial V / \partial d_\mathrm{crest} > 0` at the shadow's edge."""
+    v = m.vertices
+    crest = np.abs(v[:, 0] - 15.0) < 1.0
+    ridge = jnp.asarray(np.where(crest, DEPTH - 10.0, DEPTH))
+    u = np.linspace(0.5, 60.0, 600)
+    pose = jnp.array([0, 0, SONAR_Z, 0, 0, 0])
+    edge = int(np.argmin(np.abs(u - 15 * D / 5)))  # sample at the shadow's far edge
+
+    def V_edge(t):
+        P, _, _ = G.samples(m, ridge + t * jnp.asarray(crest, dtype=float), pose, STARBOARD, u)
+        return G.horizon_visibility(P, G.pose_frame(pose)[0], u, 0.5, 5e-3)[edge]
+
+    assert float(jax.grad(V_edge)(0.0)) > 0

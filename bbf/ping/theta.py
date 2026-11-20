@@ -48,6 +48,11 @@ class Theta:
 
     The defaults for :math:`\beta_0`, :math:`\omega`, :math:`\alpha` are the PingDSP 3DSS
     values of the prototype (50° below horizontal, 60°, pure water at 450 kHz).
+
+    Shadows: visibility softness :math:`\tau` (`shadow_tau`, rad) and self-shadow margin
+    (`shadow_margin`, m) of `geometry.horizon_visibility`; lit/shadow labels are taken over
+    blocks of `block` bins, and a noise-only block is labelled lit with probability
+    `label_fa`.
     """
     noise: npt.ArrayLike
     L: float
@@ -61,6 +66,10 @@ class Theta:
     beta0: float = math.radians(50.0)
     omega: float = math.radians(60.0)
     alpha: float = 0.0092
+    shadow_tau: float = 5e-4
+    shadow_margin: float = 0.5
+    block: int = 8
+    label_fa: float = 0.01
 
     def __post_init__(self):
         for name in ("noise", "eps", "eta", "zeta", "ell", "log_kappa_mean", "log_kappa_std"):

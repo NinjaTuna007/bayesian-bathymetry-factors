@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -106,22 +107,27 @@ def echo(theta: Theta, pose, side: int, P, n):
     return B * cos_phi**2 * jnp.exp(-4 * theta.alpha * r) / r**3, r
 
 
-def visibility(mesh: M.Mesh, d, pose, side: int, u, step: float = 0.25, margin: float = 0.5) -> np.ndarray:
-    r"""Visibility :math:`V` (K,) bool: whether the straight ray to each curve sample clears the seabed.
+def horizon_visibility(P, s, u, margin: float, tau: float):
+    r"""Visibility :math:`V_k` (K,) of curve samples P (K, 3) from the sonar at s, along one side's curve.
 
-    The ray is sampled every `step` m horizontally and is shadowed where the seabed rises
-    above it, except within `margin` m of the sample, so a face does not shadow itself.
-    Seabed off the mesh never shadows. Not differentiable; the outer loop holds it fixed.
+    The ray to a sample lies in the ping plane, as does the curve, so a sample is visible
+    when its elevation angle :math:`\alpha_k = \operatorname{atan2}(z_k - s_z, \lVert q_k - s_{xy} \rVert)`
+    is at least the horizon :math:`H_k = \max \{\alpha_j : u_j \le u_k - \text{margin}\}` cast by
+    the samples closer in:
+
+    .. math::
+
+        V_k = \sigma\bigl((\alpha_k - H_k) / \tau\bigr),
+
+    a step for :math:`\tau = 0`. The margin keeps a sample from being shadowed by its own
+    face. Samples must be ordered outboard by u (K,). Differentiable in P and s for
+    :math:`\tau > 0`, so gradients reach the crest that casts a shadow and the seabed behind it.
     """
-    P, _, _ = samples(mesh, d, pose, side, u)
-    s = np.asarray(pose_frame(pose)[0])
-    P = np.asarray(P)
-    horiz = np.hypot(P[:, 0] - s[0], P[:, 1] - s[1])
-    if len(P) == 0:
-        return np.zeros(0, bool)
-    t = np.linspace(0.0, 1.0, max(math.ceil(horiz.max() / step), 1) + 1)[1:-1]
-    xy = s[None, None, :2] + t[None, :, None] * (P[:, None, :2] - s[None, None, :2])
-    ray_z = s[2] + t[None, :] * (P[:, None, 2] - s[2])
-    before = t[None, :] * horiz[:, None] < horiz[:, None] - margin
-    seabed_z = mesh.z_ref - np.asarray(M.interpolate(mesh, d, xy))  # NaN off the mesh compares False
-    return ~((seabed_z > ray_z) & before).any(axis=1)
+    alpha = jnp.arctan2(P[:, 2] - s[2], jnp.linalg.norm(P[:, :2] - s[:2], axis=-1))
+    u = np.asarray(u)
+    idx = np.searchsorted(u, u - margin, side="right") - 1  # last sample at least `margin` closer
+    peak = jax.lax.cummax(alpha)
+    horizon = jnp.where(jnp.asarray(idx >= 0), peak[np.maximum(idx, 0)], -math.pi)
+    if tau == 0:
+        return (alpha >= horizon).astype(alpha.dtype)
+    return jax.nn.sigmoid((alpha - horizon) / tau)
