@@ -66,3 +66,30 @@ def test_inference_recovers_bump_from_plane(run):
     rmse0 = float(np.sqrt(np.mean((d0[seen] - d_true[seen]) ** 2)))
     rmse = float(np.sqrt(np.mean((out["d"][seen] - d_true[seen]) ** 2)))
     assert rmse < 0.5 * rmse0
+
+
+@pytest.mark.slow
+def test_trend_search_crosses_to_the_true_tilt():
+    """From a tilted start on a featureless slope, the global trend search finds the true slope and the
+    Laplace standard deviations then cover the errors; Gauss-Newton alone stays at the start's tilt."""
+    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = 20.0 + 0.03 * v[:, 0]
+    th = P.Theta(noise=1e-7, L=0.6, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5)
+    u = P.u_grid(N_BINS, DR, du=0.05)
+    rng = np.random.default_rng(0)
+    passes = []
+    for x0 in (-6.0, 6.0):
+        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, SONAR_Z), np.zeros((9, 3))])
+        passes.append(simulate_pass(m, jnp.asarray(d_true), poses, th, u, rng, f"x{x0}"))
+    seen = (np.abs(v[:, 1]) <= 4) & (np.abs(v[:, 0]) <= 30)
+    b0 = np.array([0.08, 0.0, 20.0])
+    d0 = b0[0] * v[:, 0] + b0[2]
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=b0, Sigma_beta=np.diag([0.01, 0.01, 4.0]))
+    out = infer(passes, m, prior, th, d0, b0, u, rounds=1, inner=8, n_draws=1500, calib_every=3, chunk=4,
+                laplace_samples=100, trend_search={"slopes_x": np.arange(-0.02, 0.131, 0.025), "steps": 4},
+                log=lambda s: None)
+    err = out["d"] - d_true
+    assert out["beta"][0] == pytest.approx(0.03, abs=0.01)
+    assert float(np.sqrt(np.mean(err[seen] ** 2))) < 0.3
+    assert np.median(np.abs(err[seen]) / out["sd_d"][seen]) < 2.0

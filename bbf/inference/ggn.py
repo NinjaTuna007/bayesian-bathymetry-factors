@@ -18,7 +18,9 @@ likelihood in a scalar prediction and :math:`G` that prediction's derivative:
 * match pair :math:`m`: prediction :math:`e_m - \sigma_m\mu`, Fisher :math:`r_m L^2/(2L+1)` of
   :math:`p_L`, :math:`\partial e/\partial S_a = 1/(S_a + f_a)`, :math:`\partial e/\partial S_b = -1/(S_b + f_b)`;
 
-plus the prior's exact precision on :math:`(d, \beta)` and the Gaussian prior on each :math:`u`.
+plus the prior's exact precision on :math:`(d, \beta)` and the Gaussian prior on each :math:`u`. With a
+tempering power :math:`\alpha` (`Problem.temper`), every data term, including the ping factor's
+prior on :math:`u` that lives inside it, is scaled by :math:`\alpha`; the prior on :math:`(d, \beta)` is not.
 :math:`S` reaches :math:`d` through the per-ping-side Jacobians of `bbf.inference.jacobian`.
 """
 import math
@@ -153,11 +155,14 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, mus
     sh = shadow_rows(problem, S, u_hat)
     rows_i, rows_j, vals = [], [], []
 
-    def add(Msp, r0=0, c0=0):
+    alpha = problem.temper
+
+    def add(Msp, scale=None):
+        """Add a contribution; data terms are scaled by the tempering power unless scale is given."""
         Mc = Msp.tocoo()
-        rows_i.append(Mc.row + r0)
-        rows_j.append(Mc.col + c0)
-        vals.append(Mc.data)
+        rows_i.append(Mc.row)
+        rows_j.append(Mc.col)
+        vals.append(Mc.data * (alpha if scale is None else scale))
 
     B = problem.theta.block
     for p, (W, a, c) in enumerate(pw):
@@ -199,10 +204,10 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, mus
         add(sp.coo_matrix((cross[nz], (nz, np.full(len(nz), mi))), shape=(size, size)))
         add(sp.coo_matrix((cross[nz], (np.full(len(nz), mi), nz)), shape=(size, size)))
         add(sp.coo_matrix(([float(gmu @ gmu)], ([mi], [mi])), shape=(size, size)))
-    # prior on (d, beta)
-    add(problem.prior.joint_precision())
+    # prior on (d, beta), not tempered
+    add(problem.prior.joint_precision(), scale=1.0)
     # an offset no pair constrains (no mixed pairs) needs a tiny ridge to keep H definite
     ridge = np.arange(lay["mu"], size)
-    add(sp.coo_matrix((np.full(len(ridge), 1e-8), (ridge, ridge)), shape=(size, size)))
+    add(sp.coo_matrix((np.full(len(ridge), 1e-4), (ridge, ridge)), shape=(size, size)), scale=1.0)
     return sp.csc_matrix(sp.coo_matrix((np.concatenate(vals), (np.concatenate(rows_i), np.concatenate(rows_j))),
                                        shape=(size, size)))

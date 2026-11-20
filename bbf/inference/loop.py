@@ -27,6 +27,8 @@ from bbf.inference.laplace import laplace
 from bbf.inference.objective import Problem, render
 from bbf.io import Pass
 from bbf.match import draw_overlap, project, select_pairs
+from bbf.mesh import locate
+from bbf.ping.geometry import trace
 from bbf.ping.shadow import block_labels, onset_valid, ping_use, water_column_lit_rate
 from bbf.ping.theta import Theta
 from bbf.prior import Prior
@@ -44,6 +46,19 @@ def jacobians(problem: Problem, d) -> list[list[list]]:
                                  problem.dr) for c in (0, 1)] for pose in poses] for poses in problem.poses]
 
 
+def observed_vertices(problem: Problem, d) -> np.ndarray:
+    """Vertices (n,) touched by some ping-side's curve at depths d."""
+    mesh = problem.mesh
+    seen = np.zeros(mesh.n_vertices, bool)
+    for poses in problem.poses:
+        for pose in poses[:: max(len(poses) // 50, 1)]:
+            for c in (0, 1):
+                q = np.asarray(trace(mesh, jnp.asarray(d), jnp.asarray(pose), c, problem.u))
+                tri, _, inside = (np.asarray(a) for a in locate(mesh, q))
+                seen[mesh.triangles[tri[inside]].ravel()] = True
+    return seen
+
+
 def _pair_key(pairs) -> set:
     return {(k, *row) for k, pr in pairs.items()
             for row in zip(pr.ping_a, pr.side_a, pr.bin_a, pr.ping_b, pr.side_b, pr.bin_b)}
@@ -51,8 +66,19 @@ def _pair_key(pairs) -> set:
 
 def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0, u, rounds: int = 3,
           inner: int = 10, n_draws: int = 4000, calib_every: int = 50, chunk: int = 32, seed: int = 0,
-          onset: float = 1.5, laplace_samples: int = 0, callback=None, log=print) -> dict:
+          onset: float = 1.5, laplace_samples: int = 0, temper=None, trend_search=None, callback=None,
+          log=print) -> dict:
     """Run the outer loop from (d0, beta0); returns depths, trend, theta, pairs and history.
+
+    temper: tempering power per round (a sequence ending at 1, e.g. 0.01, 0.1, 1); the data
+    terms are scaled by it so the prior smooths over sharp local modes in early rounds. Its
+    length sets the number of rounds, which then run in full. It scales the large-scale
+    evidence as much as the fine-scale roughness, and did not move a wrong start tilt in the
+    synthetic tests; the trend search does.
+
+    trend_search: in the first round, before Gauss--Newton, try these trends and keep the best
+    after refinement (`bbf.inference.search.search_trend`): a dict with `slopes_x`, optionally
+    `slopes_y` and `steps`. The mean depth kept per candidate is that of the vertices the passes see.
 
     With `laplace_samples` > 0, also the Laplace posterior standard deviations of the depths
     (`sd_d`) and trend (`sd_beta`) at the final mode, from that many Monte Carlo samples.
@@ -72,7 +98,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     d, beta = np.asarray(d0, dtype=float), np.asarray(beta0, dtype=float)
     history, prev_pairs, pairs = [], None, {}
     problem = None
-    for rnd in range(rounds):
+    schedule = [1.0] * rounds if temper is None else list(temper)
+    for rnd, alpha in enumerate(schedule):
         t0 = time.time()
         base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk,
                        valid=valid)
@@ -99,9 +126,16 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
                 pb = project(mesh, d, poses[b], q, ys[b].shape[-1], dr)
                 pairs[(a, b)] = select_pairs(pa, pb, S[a], S[b], ys[a], ys[b], theta, dr)
         log(f"round {rnd}: {sum(len(p) for p in pairs.values())} matched pairs")
-        problem = dataclasses.replace(base, theta=theta, pairs=pairs)
+        problem = dataclasses.replace(base, theta=theta, pairs=pairs, temper=float(alpha))
+        if alpha != 1.0:
+            log(f"round {rnd}: tempering power {alpha:g}")
         # 3. frozen Jacobians, 4. Gauss-Newton
         tj = time.time()
+        if rnd == 0 and trend_search is not None:
+            from bbf.inference.search import search_trend
+            seen = observed_vertices(problem, d)
+            d, beta, _ = search_trend(problem, d, beta, observed=seen, log=log, **trend_search)
+            log(f"round {rnd}: trend search picked slopes ({beta[0]:+.3f}, {beta[1]:+.3f})")
         J = jacobians(problem, d)
         log(f"round {rnd}: Jacobians in {time.time() - tj:.0f}s")
         d, beta, hist = gauss_newton(problem, d, beta, J, max_iter=inner, log=log)
@@ -110,7 +144,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         if callback is not None:
             callback(rnd, d, beta, theta)
         key = _pair_key(pairs)
-        if prev_pairs is not None and key == prev_pairs:
+        if temper is None and prev_pairs is not None and key == prev_pairs:
             log(f"round {rnd}: matched pairs unchanged; done")
             break
         prev_pairs = key

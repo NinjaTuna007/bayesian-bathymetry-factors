@@ -14,6 +14,7 @@ from .loop import infer, jacobians, labels_of
 from .multiscale import coarsen_pass, coarsen_theta, infer_multiscale
 from .objective import Problem, data_term, data_vjp, render, value, value_and_grad
 from .scan import depths_from_points, scan_pass, scan_start
+from .search import search_trend
 
 __all__ = [
     "Problem",
@@ -42,6 +43,7 @@ __all__ = [
     "sample_precision",
     "scan_pass",
     "scan_start",
+    "search_trend",
     "value",
     "value_and_grad",
 ]

@@ -1,5 +1,8 @@
 r"""The log posterior of the depths and its gradient, through the rendered unit intensities.
 
+With a tempering power :math:`\alpha` (`Problem.temper`), the data term is :math:`\alpha F`; the
+default :math:`\alpha = 1` is the posterior itself.
+
 Every data factor depends on the depths only through the unit intensities :math:`S` of the
 pings (`bbf.ping.unit_intensity`): the ping factor through each ping-side's :math:`S`, the
 shadow factor through block means of :math:`S`, and the match factor through :math:`S` at the
@@ -48,6 +51,7 @@ class Problem:
     pairs: dict[tuple[int, int], Pairs] = field(default_factory=dict)
     chunk: int = 32
     valid: list[np.ndarray] | None = None  # per pass (n, 2, n_blocks): blocks to use (see onset_valid)
+    temper: float = 1.0  # power on the data terms; < 1 lets the prior smooth over sharp local modes
 
     @property
     def n_bins(self) -> int:
@@ -140,7 +144,7 @@ def data_term(problem: Problem):
             v, mu = log_match_factor(pb.pairs[(a, b)], S_list[a], S_list[b], ys[a], ys[b], th, dr)
             total = total + v
             mus.append(mu)
-        return total, (u_hats, mus)
+        return pb.temper * total, (u_hats, mus)
 
     return jax.jit(F)
 
