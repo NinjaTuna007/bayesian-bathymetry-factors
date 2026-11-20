@@ -1,4 +1,8 @@
-r"""Start of inference from per-ping-side planes fitted to the intensities.
+r"""Per-ping-side planes fitted to the intensities: a diagnostic, falsified as a start.
+
+On real data the planes of two passes disagreed by metres where they see the same ground:
+the slopes absorbed errors in the gain and beam pattern (`scripts/scan_overlap.py`). The scan
+is kept for that diagnostic; inference starts from the first echoes (`bbf.inference.init`).
 
 A single plane through the first echoes cannot tell relief under the tracks from a tilt: a
 bump below the passes raises their first echoes, and the plane tilts to match. Each side of
@@ -14,43 +18,24 @@ factors (`bbf.ping.factor`, `bbf.ping.shadow`) of that ping-side alone, coarse t
 prototype's ``geometry_scan``: depth at zero slope, slope at that depth, alternating local depth
 and slope scans (the two trade off along a ridge), then both jointly.
 A plane needs no mesh, so each candidate is rendered in closed form.
-
-The fitted planes give seabed points along each ping-side's swath; their depths are averaged
-onto the mesh vertices and the vertices without points get the conditional mean of the GMRF
-prior given the others (`depths_from_points`).
 """
 from functools import cache
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-import scipy.sparse as sp
-from sksparse.cholmod import cho_factor
 
-from bbf import mesh as M
-from bbf.inference.init import plane_fit
 from bbf.io import Pass
 from bbf.ping import geometry as G
-from bbf.ping.factor import _objective, mode
-from bbf.ping.render import split_into_bins
+from bbf.ping.factor import laplace_ping_side
+from bbf.ping.render import curve_length, split_into_bins
 from bbf.ping.shadow import log_shadow_side, ping_use
-from bbf.ping.theta import PORT, Theta
-from bbf.prior import Prior
-
-
-def _frame(pose, side: int):
-    """Sonar position, unit heading, horizontal forward and outboard axes of a side."""
-    s, R = G.pose_frame(pose)
-    hd = R[:, 0]
-    nxy = jnp.linalg.norm(hd[:2])
-    fwd = hd[:2] / nxy
-    out = jnp.array([-fwd[1], fwd[0]]) if side == PORT else jnp.array([fwd[1], -fwd[0]])
-    return s, hd, nxy, fwd, out
+from bbf.ping.theta import Theta
 
 
 def plane_samples(pose, side: int, D, slope, u):
     r"""Seabed points (K, 3) and upward normals (K, 3) of the plane :math:`z = s_z - D + \text{slope}\,u` in the ping plane."""
-    s, hd, nxy, fwd, out = _frame(pose, side)
+    s, hd, nxy, fwd, out = G.side_frame(pose, side)
     u = jnp.asarray(u)
     z = s[2] - D + slope * u
     w = -hd[2] * (z - s[2]) / nxy  # along-track shift that keeps the point in the ping plane
@@ -64,10 +49,7 @@ def plane_unit_intensity(pose, side: int, theta: Theta, D, slope, u, n_bins: int
     r"""Unit intensity (n_bins,) of one side over a plane seabed; a plane seen from above hides nothing."""
     P, n = plane_samples(pose, side, D, slope, u)
     a, r = G.echo(theta, pose, side, P, n)
-    seg = jnp.linalg.norm(jnp.diff(P[:, :2], axis=0), axis=-1)
-    pad = jnp.zeros(1, dtype=seg.dtype)
-    dq = 0.5 * (jnp.concatenate([seg, pad]) + jnp.concatenate([pad, seg]))
-    w = jnp.where(P[:, 2] <= theta.z_water, a * dq, 0.0) / dr
+    w = jnp.where(P[:, 2] <= theta.z_water, a * curve_length(P[:, :2]), 0.0) / dr
     return split_into_bins(r, w, n_bins, dr)
 
 
@@ -79,9 +61,7 @@ def _scorer(theta: Theta, side: int, dr: float, n_bins: int, iters: int = SCAN_I
     """Jitted score of many (D, slope) candidates for one ping-side: ping plus shadow factor."""
     def one(pose, y, use, labels, valid, u, D, slope):
         S = plane_unit_intensity(pose, side, theta, D, slope, u, n_bins, dr)
-        Fu, _, _ = _objective(theta, side, dr, y, S, use)
-        u_hat, H = mode(theta, side, dr, y, S, use, iters=iters)
-        ping = Fu(u_hat) + 0.5 * jnp.log(2 * jnp.pi) - 0.5 * jnp.log(H)
+        ping, u_hat = laplace_ping_side(theta, side, dr, y, S, use, iters=iters)
         return ping + log_shadow_side(theta, side, labels, S, u_hat, valid)
     return jax.jit(jax.vmap(one, in_axes=(None, None, None, None, None, None, 0, 0)))
 
@@ -128,54 +108,3 @@ def scan_pass(ps: Pass, theta: Theta, labels, valid, r0, u, stride: int = 10, lo
             log(f"  scan {ps.name}: ping {t}: port D {out[i, 0, 0]:.2f} slope {out[i, 0, 1]:+.2f}, "
                 f"stbd D {out[i, 1, 0]:.2f} slope {out[i, 1, 1]:+.2f}")
     return out
-
-
-def plane_points(ps: Pass, fits, stride: int = 10, step: float = 1.0) -> np.ndarray:
-    """World seabed points (m, 3) along each fitted ping-side, every `step` m out to the swath's end."""
-    pts = []
-    max_range = ps.n_bins * ps.dr
-    for i, t in enumerate(np.arange(0, ps.n_pings, stride)):
-        for c in (0, 1):
-            D, slope, _ = fits[i, c]
-            if not np.isfinite(D):
-                continue
-            uu = np.arange(0.0, max_range, step)
-            P, _ = plane_samples(jnp.asarray(ps.poses[t]), c, D, slope, uu)
-            P = np.asarray(P)
-            r = np.linalg.norm(P - np.asarray(ps.poses[t, :3]), axis=1)
-            pts.append(P[(r <= max_range) & (P[:, 2] < ps.poses[t, 2])])
-    return np.concatenate(pts) if pts else np.zeros((0, 3))
-
-
-def depths_from_points(mesh: M.Mesh, points: np.ndarray, prior: Prior, sigma_obs: float = 0.5) -> np.ndarray:
-    r"""Mesh depths from world seabed points: vertex averages, conditional mean of the GMRF elsewhere.
-
-    Each point counts as an observation of its nearest vertex's depth with standard deviation
-    `sigma_obs`; the result maximises :math:`\log p(d \mid \beta) + \sum \log \mathcal{N}(\text{obs} \mid d, \sigma_\mathrm{obs}^2)`
-    at the prior's trend mean.
-    """
-    q = mesh.to_local(points[:, :2])
-    tri, bary, inside = (np.asarray(a) for a in M.locate(mesh, q))
-    vert = mesh.triangles[tri, np.argmax(bary, axis=1)][inside]
-    depth = (mesh.z_ref - points[:, 2])[inside]
-    n = np.bincount(vert, minlength=mesh.n_vertices).astype(float)
-    total = np.bincount(vert, depth, minlength=mesh.n_vertices)
-    W = sp.diags(n / sigma_obs**2)
-    mean_trend = prior.X @ prior.mu_beta
-    rhs = prior.Lambda @ mean_trend + total / sigma_obs**2
-    return cho_factor(sp.csc_matrix(prior.Lambda + W)).solve(rhs)
-
-
-def scan_start(passes: list[Pass], mesh: M.Mesh, theta: Theta, labels, valid, r0, u, prior_of, stride: int = 10,
-               log=None):
-    """Start depths and trend from per-ping-side planes: (d0, beta0, points, fits per pass).
-
-    prior_of(beta) builds the GMRF prior for a trend mean; it is called with the robust plane
-    through the scan points, and the depths are its conditional mean given those points.
-    """
-    fits = [scan_pass(p, theta, lab, val, r, u, stride=stride, log=log) for p, lab, val, r in zip(passes, labels, valid, r0)]
-    pts = np.concatenate([plane_points(p, f, stride) for p, f in zip(passes, fits)])
-    beta0 = plane_fit(pts, mesh)
-    d0 = depths_from_points(mesh, pts, prior_of(beta0))
-    return d0, beta0, pts, fits
-

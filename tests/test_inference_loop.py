@@ -23,8 +23,7 @@ def simulate_pass(m, d, poses, th, u, rng, name):
             spike = rng.random(N_BINS) < th.at(c).eps
             y[t, c] = np.where(spike, gamma_dist.rvs(1.0, scale=I_sp, random_state=rng),
                                gamma_dist.rvs(th.L, scale=I_bar / th.L, random_state=rng))
-    return Pass(name=name, poses=poses, y=y, dr=DR, t=np.arange(len(poses)) * 0.1,
-                bathy_ping=np.zeros(0, np.int64), bathy_xyz=np.zeros((0, 3)))
+    return Pass(name=name, poses=poses, y=y, dr=DR, t=np.arange(len(poses)) * 0.1)
 
 
 @pytest.fixture(scope="module")
@@ -93,3 +92,31 @@ def test_trend_search_crosses_to_the_true_tilt():
     assert out["beta"][0] == pytest.approx(0.03, abs=0.01)
     assert float(np.sqrt(np.mean(err[seen] ** 2))) < 0.3
     assert np.median(np.abs(err[seen]) / out["sd_d"][seen]) < 2.0
+
+
+@pytest.mark.slow
+def test_inference_with_free_sonar_parameters():
+    """Two rounds with psi free from a wrong beam: every step ascends and psi moves into theta."""
+    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = np.asarray(DEPTH - 3.0 * np.exp(-((v[:, 0] - 3) ** 2 + v[:, 1] ** 2) / (2 * 4.0**2)))
+    th = P.Theta(noise=1e-7, L=0.6, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5)
+    u = P.u_grid(N_BINS, DR, du=0.05)
+    rng = np.random.default_rng(1)
+    passes = []
+    for x0 in (-6.0, 6.0):
+        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, SONAR_Z), np.zeros((9, 3))])
+        passes.append(simulate_pass(m, jnp.asarray(d_true), poses, th, u, rng, f"x{x0}"))
+    import dataclasses
+    wrong = dataclasses.replace(th, beta0=np.radians([56.0, 44.0]))
+    psi0 = P.psi_of(wrong)
+    sd = np.array([[np.radians(15), np.radians(20), 0.2]] * 2)
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=np.array([0.0, 0.0, DEPTH]), Sigma_beta=np.diag([0.01, 0.01, 4.0]))
+    out = infer(passes, m, prior, wrong, jnp.asarray(d_true), np.array([0.0, 0.0, DEPTH]), u, rounds=2, inner=4,
+                n_draws=1500, calib_every=3, chunk=4, psi_prior=(psi0, sd), log=lambda s: None)
+    for r in out["history"]:
+        e = [h["ell"] for h in r["gn"]]
+        assert np.all(np.diff(e) > 0)
+    assert np.all(np.isfinite(out["psi"])) and not np.allclose(out["psi"], psi0)
+    np.testing.assert_allclose(P.psi_of(out["theta"]), out["psi"])
+    np.testing.assert_allclose(P.psi_of(out["problem"].theta), out["psi"])

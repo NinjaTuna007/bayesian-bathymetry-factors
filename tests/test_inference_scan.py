@@ -50,37 +50,3 @@ def test_scan_recovers_plane():
         # (on port, -0.20 scores 0.2 log units above the true -0.15), which averages out over pings
         assert D_hat == pytest.approx(D, abs=0.15)
         assert s_hat == pytest.approx(slope, abs=0.08)
-
-
-@pytest.mark.slow
-def test_scan_start_beats_first_echo_plane():
-    """With relief under the tracks, per-ping-side planes avoid the tilt a single plane takes on."""
-    import test_inference_loop as T
-
-    from bbf import prior as PR
-    from bbf.inference import init as I
-    from bbf.inference.loop import labels_of
-    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
-    v = m.vertices
-    d_true = np.asarray(T.DEPTH - 3.0 * np.exp(-((v[:, 0] - 3) ** 2 + v[:, 1] ** 2) / (2 * 4.0**2)) + 0.03 * v[:, 0])
-    th = theta()
-    u = P.u_grid(T.N_BINS, T.DR, du=0.05)
-    rng = np.random.default_rng(0)
-    passes = []
-    for x0 in (-6.0, 6.0):
-        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, T.SONAR_Z), np.zeros((9, 3))])
-        passes.append(T.simulate_pass(m, jnp.asarray(d_true), poses, th, u, rng, f"x{x0}"))
-    seen = (np.abs(v[:, 1]) <= 4) & (np.abs(v[:, 0]) <= 30)
-
-    def rmse(d):
-        return float(np.sqrt(np.mean((d[seen] - d_true[seen]) ** 2)))
-
-    pts = np.concatenate([I.first_echo_points(p, I.first_echo(p, th)) for p in passes])
-    plane = I.initial_depths(m, I.plane_fit(pts, m))
-    labels = [labels_of(p, th) for p in passes]
-    r0 = [I.first_echo(p, th) for p in passes]
-    valid = [P.onset_valid(r, lab.shape[-1], th.block * T.DR) for r, lab in zip(r0, labels)]
-    d0, _, _, _ = Sc.scan_start(passes, m, th, labels, valid, r0, u,
-                                lambda b: PR.Prior(m, 5.0, 2.0, mu_beta=b, Sigma_beta=np.diag([0.01, 0.01, 4.0])),
-                                stride=1)
-    assert rmse(d0) < 0.6 * rmse(plane)

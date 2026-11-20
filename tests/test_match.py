@@ -161,3 +161,15 @@ def test_match_factor_on_two_passes(two_passes):
     _, jv = jax.jvp(lambda t: f(d_true + t * delta)[0], (0.0,), (1.0,))
     fd = (f(d_true + h * delta)[0] - f(d_true - h * delta)[0]) / (2 * h)
     assert float(jv) == pytest.approx(float(fd), rel=0.02)
+
+
+def test_taken_bins_are_not_paired_again(two_passes):
+    """Bins already paired with a third pass are left out, so each bin is in at most one pair."""
+    m, d_true, th, _, ((pa, Sa, ya), (pb, Sb, yb)) = two_passes
+    q = Mt.draw_overlap(pa, pb, N_BINS * DR, 4000, rng=4)
+    proj = (Mt.project(m, d_true, pa, q, N_BINS, DR), Mt.project(m, d_true, pb, q, N_BINS, DR))
+    first = Mt.select_pairs(*proj, Sa, Sb, ya, yb, th, DR)
+    taken = Mt.matched_mask(first, len(pa), N_BINS, "a")
+    second = Mt.select_pairs(*proj, Sa, Sb, ya, yb, th, DR, taken_a=taken)
+    assert len(first) > 300
+    assert not (Mt.matched_mask(second, len(pa), N_BINS, "a") & taken).any()

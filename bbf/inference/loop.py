@@ -1,14 +1,17 @@
 r"""Outer loop of inference (paper, Alg. 1), with lit/shadow labels in place of the visibility.
 
-Labels depend on the data only and are computed once, together with each ping-side's first
-echo: labels in the echo's onset zone are left out, and the water column before it gives
-the measured lit rate of blocks without a seabed echo. Each round, at the current depths:
+Each round, at the current depths and sonar parameters:
 
-1. render every ping; refit the spike parameters and the log-:math:`\kappa` prior
+1. label the blocks lit or dark and find each ping-side's first echo, both from the data
+   relative to the current gain: labels in the echo's onset zone are left out, and the
+   water column before it gives the measured lit rate of blocks without a seabed echo;
+   render every ping; refit the spike parameters and the log-:math:`\kappa` prior
    (`bbf.inference.calibrate`) on every `calib_every`-th ping;
 2. draw locations in each pair of passes' overlap and select the matched pairs;
-3. compute and freeze the per-ping-side Jacobians;
-4. ascend the log posterior by Gauss--Newton (`bbf.inference.gauss_newton`).
+3. compute and freeze the per-ping-side Jacobians (and the beam derivatives of :math:`S` when
+   the sonar parameters :math:`\psi` are free);
+4. ascend the log posterior by Gauss--Newton (`bbf.inference.gauss_newton`), in :math:`\psi` too
+   when it is free, and carry the new :math:`\psi` into theta for the next round.
 
 Rounds stop when the matched pairs no longer change or after `rounds`.
 """
@@ -24,19 +27,19 @@ from bbf.inference.gauss_newton import gauss_newton
 from bbf.inference.init import first_echo
 from bbf.inference.jacobian import ping_side_jacobians
 from bbf.inference.laplace import laplace
-from bbf.inference.objective import Problem, render
+from bbf.inference.objective import Problem, beam_jacobian, render
 from bbf.io import Pass
-from bbf.match import draw_overlap, project, select_pairs
+from bbf.match import draw_overlap, matched_mask, project, select_pairs
 from bbf.mesh import locate
 from bbf.ping.geometry import trace
 from bbf.ping.shadow import block_labels, onset_valid, ping_use, water_column_lit_rate
-from bbf.ping.theta import Theta
+from bbf.ping.theta import Theta, psi_of, with_psi
 from bbf.prior import Prior
 
 
 def labels_of(ps: Pass, theta: Theta) -> np.ndarray:
     """Lit/shadow labels (n, 2, n_blocks) of every ping-side of a pass."""
-    return np.stack([[block_labels(ps.y[t, c], theta, c, ps.dr) for c in (0, 1)] for t in range(ps.n_pings)])
+    return np.stack([block_labels(ps.y[:, c], theta, c, ps.dr) for c in (0, 1)], axis=1)
 
 
 def jacobians(problem: Problem, d) -> list[list[list]]:
@@ -70,19 +73,17 @@ def _pair_key(pairs) -> set:
 
 def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0, u, rounds: int = 3,
           inner: int = 10, n_draws: int = 4000, calib_every: int = 50, chunk: int = 32, seed: int = 0,
-          onset: float = 1.5, laplace_samples: int = 0, temper=None, trend_search=None, callback=None,
-          log=print) -> dict:
-    """Run the outer loop from (d0, beta0); returns depths, trend, theta, pairs and history.
-
-    temper: tempering power per round (a sequence ending at 1, e.g. 0.01, 0.1, 1); the data
-    terms are scaled by it so the prior smooths over sharp local modes in early rounds. Its
-    length sets the number of rounds, which then run in full. It scales the large-scale
-    evidence as much as the fine-scale roughness, and did not move a wrong start tilt in the
-    synthetic tests; the trend search does.
+          onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
+          callback=None, log=print) -> dict:
+    r"""Run the outer loop from (d0, beta0); returns depths, trend, theta, pairs and history.
 
     trend_search: in the first round, before Gauss--Newton, try these trends and keep the best
     after refinement (`bbf.inference.search.search_trend`): a dict with `slopes_x`, optionally
     `slopes_y` and `steps`. The mean depth kept per candidate is that of the vertices the passes see.
+
+    psi_prior: (mean, sd), each (2, 3), of the sonar parameters :math:`\psi` (beam centre and width
+    in radians, linear gain in dB/m, per side); with it, :math:`\psi` is an unknown of the graph,
+    started at theta's values. Otherwise it stays at theta's.
 
     With `laplace_samples` > 0, also the Laplace posterior standard deviations of the depths
     (`sd_d`) and trend (`sd_beta`) at the final mode, from that many Monte Carlo samples.
@@ -92,19 +93,19 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     poses = [p.local_poses(mesh.origin) for p in passes]
     ys = [p.y for p in passes]
     dr = passes[0].dr
-    labels = [labels_of(p, theta) for p in passes]
-    # first echoes from the data: the echo's onset zone is left out, and the water column
-    # before it gives the lit rate of blocks without a seabed echo, by range
-    r0 = [first_echo(p, theta) for p in passes]
     block_dr = theta.block * dr
-    valid = [onset_valid(r, lab.shape[-1], block_dr, onset) for r, lab in zip(r0, labels)]
-    theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
     d, beta = np.asarray(d0, dtype=float), np.asarray(beta0, dtype=float)
     history, prev_pairs, pairs = [], None, {}
     problem = None
-    schedule = [1.0] * rounds if temper is None else list(temper)
-    for rnd, alpha in enumerate(schedule):
+    for rnd in range(rounds):
         t0 = time.time()
+        # labels and first echoes from the data, with the current gain (it moves when psi is
+        # free): the echo's onset zone is left out, and the water column before it gives the
+        # lit rate of blocks without a seabed echo, by range
+        labels = [labels_of(p, theta) for p in passes]
+        r0 = [first_echo(p, theta) for p in passes]
+        valid = [onset_valid(r, lab.shape[-1], block_dr, onset) for r, lab in zip(r0, labels)]
+        theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
         base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk,
                        valid=valid)
         S = render(base, d)
@@ -121,6 +122,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         # 2. matched pairs at the current depths
         pairs = {}
         rng = np.random.default_rng(seed + rnd)
+        taken = [np.zeros(y.shape, bool) for y in ys]  # each bin in at most one pair, over all pass pairs
         for a in range(len(passes)):
             for b in range(a + 1, len(passes)):
                 q = draw_overlap(poses[a], poses[b], ys[a].shape[-1] * dr, n_draws, rng=rng)
@@ -128,34 +130,44 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
                     continue
                 pa = project(mesh, d, poses[a], q, ys[a].shape[-1], dr)
                 pb = project(mesh, d, poses[b], q, ys[b].shape[-1], dr)
-                pairs[(a, b)] = select_pairs(pa, pb, S[a], S[b], ys[a], ys[b], theta, dr)
+                pr = select_pairs(pa, pb, S[a], S[b], ys[a], ys[b], theta, dr, taken_a=taken[a], taken_b=taken[b])
+                taken[a] |= matched_mask(pr, len(ys[a]), ys[a].shape[-1], "a")
+                taken[b] |= matched_mask(pr, len(ys[b]), ys[b].shape[-1], "b")
+                pairs[(a, b)] = pr
         log(f"round {rnd}: {sum(len(p) for p in pairs.values())} matched pairs")
-        problem = dataclasses.replace(base, theta=theta, pairs=pairs, temper=float(alpha))
-        if alpha != 1.0:
-            log(f"round {rnd}: tempering power {alpha:g}")
+        problem = dataclasses.replace(base, theta=theta, pairs=pairs, psi_prior=psi_prior)
         # 3. frozen Jacobians, 4. Gauss-Newton
         tj = time.time()
         if rnd == 0 and trend_search is not None:
             from bbf.inference.search import search_trend
             seen = observed_vertices(problem, d)
-            d, beta, _ = search_trend(problem, d, beta, observed=seen, log=log, **trend_search)
+            fixed = dataclasses.replace(problem, psi_prior=None)  # the search moves the trend only
+            d, beta, _ = search_trend(fixed, d, beta, observed=seen, log=log, **trend_search)
             log(f"round {rnd}: trend search picked slopes ({beta[0]:+.3f}, {beta[1]:+.3f})")
         J = jacobians(problem, d)
+        Jb = beam_jacobian(problem, d) if problem.free_psi else None
         log(f"round {rnd}: Jacobians in {time.time() - tj:.0f}s")
-        d, beta, hist = gauss_newton(problem, d, beta, J, max_iter=inner, log=log)
+        d, beta, psi, hist = gauss_newton(problem, d, beta, J, Jb=Jb, max_iter=inner, log=log)
+        theta = with_psi(theta, psi)
         history.append({"round": rnd, "gn": hist, "n_pairs": sum(len(p) for p in pairs.values()),
                         "time": time.time() - t0})
         if callback is not None:
             callback(rnd, d, beta, theta)
         key = _pair_key(pairs)
-        if temper is None and prev_pairs is not None and key == prev_pairs:
+        if prev_pairs is not None and key == prev_pairs:
             log(f"round {rnd}: matched pairs unchanged; done")
             break
         prev_pairs = key
-    out = {"d": d, "beta": beta, "theta": theta, "pairs": pairs, "history": history, "problem": problem}
+    if problem is not None:
+        problem = dataclasses.replace(problem, theta=theta)  # with the final psi
+    out = {"d": d, "beta": beta, "theta": theta, "psi": psi_of(theta), "pairs": pairs, "history": history,
+           "problem": problem}
     if laplace_samples > 0 and problem is not None:
         t0 = time.time()
-        lap = laplace(problem, d, beta, jacobians(problem, d), n_samples=laplace_samples, rng=seed)
+        Jb = beam_jacobian(problem, d) if problem.free_psi else None
+        lap = laplace(problem, d, beta, jacobians(problem, d), n_samples=laplace_samples, rng=seed, Jb=Jb)
         out.update(sd_d=lap["sd_d"], sd_beta=lap["sd_beta"])
+        if "sd_psi" in lap:
+            out["sd_psi"] = lap["sd_psi"]
         log(f"Laplace: depth sd median {np.median(lap['sd_d']):.2f} m in {time.time() - t0:.0f}s")
     return out

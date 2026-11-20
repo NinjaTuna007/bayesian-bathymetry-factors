@@ -37,7 +37,16 @@ from .shadow import (
     threshold,
     water_column_lit_rate,
 )
-from .theta import PORT, STARBOARD, SideTheta, Theta
+from .theta import (
+    PORT,
+    STARBOARD,
+    SideTheta,
+    Theta,
+    psi_of,
+    render_key,
+    render_theta,
+    with_psi,
+)
 
 __all__ = [
     "DU",
@@ -67,6 +76,9 @@ __all__ = [
     "ping_use",
     "pose_frame",
     "predicted",
+    "psi_of",
+    "render_key",
+    "render_theta",
     "samples",
     "split_into_bins",
     "threshold",
@@ -75,4 +87,5 @@ __all__ = [
     "unit_intensities",
     "unit_intensity",
     "water_column_lit_rate",
+    "with_psi",
 ]

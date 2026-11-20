@@ -33,7 +33,7 @@ def test_load_patch(tmp_path):
     np.testing.assert_allclose(p.y[:, 1], raw["B/starboard"].astype(float) ** 2)
     np.testing.assert_allclose(p.poses[:, 5], raw["B/yaw"])
     assert p.dr == pytest.approx(0.0132)
-    assert p.bathy_xyz.shape == (3, 3)
+    assert not hasattr(p, "bathy_xyz")  # the 3DSS bathymetry stays out of the passes
     np.testing.assert_allclose(p.local_poses((1.0, 2.0))[:, :2], p.poses[:, :2] - [1.0, 2.0])
     np.testing.assert_allclose(p.local_poses((1.0, 2.0))[:, 2:], p.poses[:, 2:])
 

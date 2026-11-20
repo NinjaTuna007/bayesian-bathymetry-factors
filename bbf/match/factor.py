@@ -31,7 +31,7 @@ import numpy as np
 from jax.scipy.special import gammaln
 
 from bbf.match.pairs import Pairs
-from bbf.ping.factor import DB_TO_LOG_I, bin_ranges
+from bbf.ping.factor import bin_ranges, log_gain
 from bbf.ping.theta import Theta
 
 E_MAX = 10.0  # half-width of the uniform outlier density (log units)
@@ -50,6 +50,17 @@ def log_pair(e, eps, L: float):
     return jnp.logaddexp(jnp.log1p(-eps) + log_ratio_pdf(e, L), jnp.log(eps) + log_u)
 
 
+def noise_floor(theta: Theta) -> np.ndarray:
+    r"""Per side (2,): the noise in reflectivity units, :math:`N_c e^{-m_c}`, the floor of :math:`\bar J / g`."""
+    return np.asarray(theta.noise) * np.exp(-np.asarray(theta.log_kappa_mean))
+
+
+def pair_eps(pairs: Pairs, theta: Theta) -> np.ndarray:
+    r"""Outlier probability (m,) of each pair: the two bins' spike chances, summed and clipped."""
+    eps = np.asarray(theta.eps)
+    return np.clip(eps[pairs.side_a] + eps[pairs.side_b], 1e-12, 0.5)
+
+
 def residual(pairs: Pairs, S_a, S_b, y_a, y_b, theta: Theta, dr: float):
     r"""Log-ratio residuals :math:`e_m` (m,) of the pairs; differentiable in S_a, S_b (n, 2, B).
 
@@ -62,12 +73,10 @@ def residual(pairs: Pairs, S_a, S_b, y_a, y_b, theta: Theta, dr: float):
     """
     r = bin_ranges(jnp.asarray(y_a).shape[-1], dr)
     g = jnp.asarray(theta.gain_db)
-    floor = jnp.asarray(np.asarray(theta.noise) * np.exp(-np.asarray(theta.log_kappa_mean)))
+    floor = jnp.asarray(noise_floor(theta))
 
     def log_J(S, p, c, b):
-        gd = g[c]
-        log_g = DB_TO_LOG_I * (gd[:, 0] + gd[:, 1] * r[b] + gd[:, 2] * jnp.log10(r[b]))
-        return log_g + jnp.log(S[p, c, b] + floor[c])
+        return log_gain(r[b], g[c]) + jnp.log(S[p, c, b] + floor[c])
 
     ya = jnp.asarray(y_a)[pairs.ping_a, pairs.side_a, pairs.bin_a]
     yb = jnp.asarray(y_b)[pairs.ping_b, pairs.side_b, pairs.bin_b]
@@ -106,7 +115,6 @@ def log_match_factor(pairs: Pairs, S_a, S_b, y_a, y_b, theta: Theta, dr: float, 
     if len(pairs) == 0:
         return jnp.asarray(0.0), jnp.asarray(0.0)
     e = residual(pairs, S_a, S_b, y_a, y_b, theta, dr)
-    eps_side = np.asarray(theta.eps)
-    eps = jnp.asarray(np.clip(eps_side[pairs.side_a] + eps_side[pairs.side_b], 1e-12, 0.5))
+    eps = jnp.asarray(pair_eps(pairs, theta))
     mu_hat, value = profile_mu(e, jnp.asarray(pairs.sign, dtype=e.dtype), eps, theta.L if L is None else L)
     return value, mu_hat

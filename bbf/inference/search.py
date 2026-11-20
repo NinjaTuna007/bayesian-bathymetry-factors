@@ -21,7 +21,7 @@ from bbf.inference.objective import Problem, data_term, value
 
 def search_trend(problem: Problem, d, beta, slopes_x, slopes_y=(0.0,), observed=None, steps: int = 4,
                  log=print) -> tuple[np.ndarray, np.ndarray, list[dict]]:
-    r"""Best (d, :math:`\beta`) over trend candidates with absolute slopes slopes_x × slopes_y.
+    r"""Best (d, :math:`\beta`) over trend candidates with absolute slopes: every pair of slopes_x and slopes_y.
 
     observed: vertices whose mean depth each candidate keeps (default all); steps: Gauss--Newton
     steps of refinement per candidate. Returns the winner and a record per candidate.
@@ -37,7 +37,7 @@ def search_trend(problem: Problem, d, beta, slopes_x, slopes_y=(0.0,), observed=
         b[0], b[1] = sx, sy
         b[2] = beta[2] + np.mean(X[obs, :2] @ (beta[:2] - b[:2]))  # keep the mean depth over obs
         dc = d + X @ (b - beta)
-        dc, bc, _ = gauss_newton(problem, dc, b, jacobians(problem, dc), max_iter=steps, log=lambda _: None)
+        dc, bc, _, _ = gauss_newton(problem, dc, b, jacobians(problem, dc), max_iter=steps, log=lambda _: None)
         ell = value(problem, dc, bc, F)
         records.append({"slopes": (sx, sy), "ell": ell, "time": time.time() - t0})
         log(f"  trend slopes ({sx:+.3f}, {sy:+.3f}): refined ell {ell:.1f} ({time.time() - t0:.0f}s)")

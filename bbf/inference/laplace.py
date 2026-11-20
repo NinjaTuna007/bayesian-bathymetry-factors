@@ -26,7 +26,7 @@ def sample_precision(H, n_samples: int, rng=None) -> np.ndarray:
     r"""Samples (size, n_samples) of :math:`\mathcal{N}(0, H^{-1})` for a sparse SPD precision H."""
     f = cho_factor(sp.csc_matrix(H))
     w = np.random.default_rng(rng).standard_normal((H.shape[0], n_samples))
-    y = f.solve(w, system="Lt")  # L^T y = w, in the factor's permuted order: y ~ N(0, (P H P^T)^-1)
+    y = f.solve(w, system="Lt")  # :math:`L^\top y = w` in the factor's permuted order: :math:`y \sim \mathcal{N}(0, (P H P^\top)^{-1})`
     x = np.empty_like(y)
     x[np.asarray(f.perm)] = y
     return x
@@ -41,14 +41,18 @@ def marginal_variances(H, n_samples: int = 200, rng=None) -> np.ndarray:
     return 1.0 / Hd + np.mean(m**2, axis=1)
 
 
-def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None) -> dict:
-    r"""Posterior standard deviations at the mode (d, :math:`\beta`) with frozen Jacobians J.
+def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=None, psi=None) -> dict:
+    r"""Posterior standard deviations at the mode (d, :math:`\beta`, :math:`\psi`) with frozen Jacobians J (and Jb).
 
-    Returns the depth standard deviations (n,), those of :math:`\beta` (3,), and the augmented
-    precision H it came from (undamped).
+    Returns the depth standard deviations (n,), those of :math:`\beta` (3,), of :math:`\psi` (2, 3)
+    when it is free, and the augmented precision H it came from (undamped).
     """
-    _, _, det = value_and_grad(problem, d, beta)
-    H = ggn.assemble(problem, J, det["S"], det["u"], det["mu"])
+    _, _, det = value_and_grad(problem, d, beta, psi=psi)
+    H = ggn.assemble(problem, J, det["S"], det["u"], det["mu"], Jb=Jb, psi=psi)
     var = marginal_variances(H, n_samples, rng)
-    n = problem.mesh.n_vertices
-    return {"sd_d": np.sqrt(var[:n]), "sd_beta": np.sqrt(var[n:n + 3]), "H": H}
+    lay = ggn.layout(problem)
+    n, ip = lay["n"], lay["psi"]
+    out = {"sd_d": np.sqrt(var[:n]), "sd_beta": np.sqrt(var[n:n + 3]), "H": H}
+    if problem.free_psi:
+        out["sd_psi"] = np.sqrt(var[ip:ip + 6]).reshape(2, 3)
+    return out

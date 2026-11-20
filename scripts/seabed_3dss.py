@@ -21,13 +21,16 @@ H_MESH, BUFFER = 0.5, 5.0
 RHO, SIGMA, SIGMA_OBS = 3.0, 2.0, 0.05  # fill-in prior: range, std, per-point noise (m)
 
 
-def bathymetry_world(ps: Pass, every: int = 2) -> np.ndarray:
-    """3DSS points of every `every`-th ping in the world frame, (m, 3)."""
+def bathymetry_world(patches, ps: Pass, every: int = 2) -> np.ndarray:
+    """3DSS points of every `every`-th ping of pass `ps` in the world frame, (m, 3), read from the patch cache."""
+    z = np.load(patches)
+    ping = z[f"{ps.name}/bathy_ping"].astype(np.int64)
+    xyz = np.column_stack([z[f"{ps.name}/bathy_{c}"] for c in "xyz"]).astype(float)
     frames = jax.vmap(P.pose_frame)(jnp.asarray(ps.poses))
     s, R = np.asarray(frames[0]), np.asarray(frames[1])
-    keep = ps.bathy_ping % every == 0
-    k = ps.bathy_ping[keep]
-    return s[k] + np.einsum("mij,mj->mi", R[k], ps.bathy_xyz[keep])
+    keep = ping % every == 0
+    k = ping[keep]
+    return s[k] + np.einsum("mij,mj->mi", R[k], xyz[keep])
 
 
 def seabed_on_mesh(world: np.ndarray, z_ref: float) -> tuple[M.Mesh, np.ndarray, np.ndarray]:

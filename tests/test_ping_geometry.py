@@ -38,7 +38,7 @@ def test_pose_frame_axes():
     np.testing.assert_allclose(R[:, 1], [-1, 0, 0], atol=1e-12)  # port: west
     np.testing.assert_allclose(R[:, 2], [0, 0, 1], atol=1e-12)   # up
     _, R = G.pose_frame(jnp.array([0, 0, 0, 0, 0, math.pi / 2]))
-    np.testing.assert_allclose(R[:, 0], [1, 0, 0], atol=1e-12)   # yaw 90° clockwise: east
+    np.testing.assert_allclose(R[:, 0], [1, 0, 0], atol=1e-12)   # yaw :math:`90^\circ` clockwise: east
     # outboard and down axes of each side at yaw 0
     np.testing.assert_allclose((R @ G.R_MOUNT[STARBOARD])[:, 1], [0, -1, 0], atol=1e-12)
     _, R = G.pose_frame(jnp.zeros(6))
@@ -82,7 +82,7 @@ def test_echo_on_flat_seabed(m):
     a, r = G.echo(th, jnp.array([0, 0, SONAR_Z, 0, 0, 0]), PORT, P, n)
     r_ref = np.hypot(np.asarray(u), D)
     beta = np.arctan2(D, np.asarray(u))
-    B = np.exp(-4 * math.log(2) * (beta - th.beta0) ** 2 / th.omega**2)
+    B = np.exp(-4 * math.log(2) * (beta - th.beta0[PORT]) ** 2 / th.omega[PORT] ** 2)
     expect = B * (D / r_ref) ** 2 * np.exp(-4 * th.alpha * r_ref) / r_ref**3
     np.testing.assert_allclose(r, r_ref, rtol=1e-12)
     np.testing.assert_allclose(a, expect, rtol=1e-10)
@@ -147,3 +147,39 @@ def test_gradient_in_deep_shadow(m):
 
     g = float(jax.grad(log_V)(0.0))
     assert 0.1 < g < 100  # per metre of crest depth
+
+
+def test_each_side_follows_its_own_beam(m):
+    """With different beams per side, each side's echo is the one rendered with its own beam on both sides."""
+    import dataclasses
+    th = theta()
+    d = jnp.full(m.n_vertices, DEPTH)
+    pose = jnp.array([0, 0, SONAR_Z, 0, 0, 0])
+    u = jnp.linspace(0.5, 40.0, 80)
+    mixed = dataclasses.replace(th, beta0=np.radians([40.0, 60.0]), omega=np.radians([50.0, 70.0]))
+    for side, (b0, om) in ((PORT, (40.0, 50.0)), (STARBOARD, (60.0, 70.0))):
+        own = dataclasses.replace(th, beta0=np.radians(b0), omega=np.radians(om))
+        P, n, _ = G.samples(m, d, pose, side, u)
+        a_mixed, _ = G.echo(mixed, pose, side, P, n)
+        a_own, _ = G.echo(own, pose, side, P, n)
+        np.testing.assert_allclose(a_mixed, a_own, rtol=1e-12)
+    P, n, _ = G.samples(m, d, pose, PORT, u)
+    assert not np.allclose(G.echo(mixed, pose, PORT, P, n)[0], G.echo(th, pose, PORT, P, n)[0])
+
+
+def test_off_mesh_samples_cast_no_horizon():
+    """A cropped mesh east of the sonar: off-mesh samples have no seabed, so they must not shadow on-mesh ones."""
+    def plane(v):
+        return DEPTH + 0.3 * v[:, 1]  # tilted along track, so the off-mesh depth guess is wrong
+    big = M.build(-5.0, 60.0, -15.0, 15.0, h=1.0, origin=(0.0, 0.0))
+    small = M.build(10.0, 60.0, -15.0, 15.0, h=1.0, origin=(0.0, 0.0))
+    pose = jnp.array([0.0, 0.0, SONAR_Z, 0.0, 0.0, 0.0])
+    u = np.linspace(0.5, 50.0, 500)
+    V, inside = {}, {}
+    for name, mm in (("big", big), ("small", small)):
+        d = jnp.asarray(plane(mm.vertices))
+        P, _, inside[name] = G.samples(mm, d, pose, STARBOARD, u)
+        V[name] = np.asarray(G.horizon_visibility(P, G.pose_frame(pose)[0], u, 0.5, WAVELENGTH, inside[name]))
+    on = np.asarray(inside["small"])
+    assert on.any() and (~on).any()
+    np.testing.assert_allclose(V["small"][on], V["big"][on], atol=1e-9)

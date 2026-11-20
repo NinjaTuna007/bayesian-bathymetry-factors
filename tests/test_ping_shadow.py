@@ -54,18 +54,24 @@ def test_detection_matches_simulation_and_rises_with_snr():
 
 @pytest.fixture(scope="module")
 def wall_scene():
-    """True seabed: a wall up to a plateau 3 m below the sonar. Model: the same wall, but
-    the seabed drops back behind the crest, so the model puts the plateau in shadow."""
+    """True seabed: a wall up to a crest 3 m below the sonar, then a drop back down, so the far
+    side lies in shadow. Model: the wall up to a plateau, which would be lit there."""
     m = M.build(-40.0, 60.0, -30.0, 30.0, h=1.0, origin=(0.0, 0.0))
     x = m.vertices[:, 0]
     wall = np.clip((x - 5.0) / 5.0, 0.0, 1.0)  # 0 before x = 5, 1 after x = 10
-    d_true = DEPTH - 12.0 * wall
+    d_model = DEPTH - 12.0 * wall
     behind = (x > 12.0)
-    d_model = np.where(behind, DEPTH, d_true)
+    d_true = np.where(behind, DEPTH, d_model)
     return m, jnp.asarray(d_true), jnp.asarray(d_model), behind
 
 
-def test_shadow_factor_raises_seabed_behind_crest(wall_scene):
+def test_shadow_factor_lowers_seabed_behind_crest(wall_scene):
+    """Dark blocks where the model predicts an echo: the factor prefers the drop.
+
+    Locally, less echo can come from raising the plateau towards grazing as well as from
+    lowering it into shadow (the 12 m drop is far outside the linear range), so only the
+    values are compared; the gradient must be finite and reach the seabed behind the wall.
+    """
     m, d_true, d_model, behind = wall_scene
     th = make_theta()
     rng = np.random.default_rng(2)
@@ -80,8 +86,7 @@ def test_shadow_factor_raises_seabed_behind_crest(wall_scene):
 
     assert float(f(d_true)) > float(f(d_model))
     g = np.asarray(jax.grad(f)(d_model))
-    # shallower seabed behind the crest explains the lit blocks: the gradient there is negative
-    assert g[behind].sum() < 0
+    assert np.all(np.isfinite(g)) and np.abs(g[behind]).max() > 0
 
 
 def test_ping_use_combines_labels_and_matched():

@@ -59,7 +59,8 @@ def main():
     A, B = load_patch(args.patches, "A"), load_patch(args.patches, "B")
     n_bins, dr = A.n_bins, A.dr
     z_ref = float(np.median(np.concatenate([A.poses[:, 2], B.poses[:, 2]])))
-    mesh, d, seen = seabed_on_mesh(np.concatenate([bathymetry_world(A), bathymetry_world(B)]), z_ref)
+    mesh, d, seen = seabed_on_mesh(np.concatenate([bathymetry_world(args.patches, A),
+                                                    bathymetry_world(args.patches, B)]), z_ref)
     pa, pb = A.local_poses(mesh.origin), B.local_poses(mesh.origin)
     print(f"mesh {mesh.n_vertices} vertices, {seen.mean():.0%} with 3DSS points")
 

@@ -27,6 +27,10 @@ default it is :math:`\epsilon_B + (1 - \epsilon_B) p_\mathrm{fa}` with
 :math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`. Weak echoes at far range have :math:`m_j` near one,
 so a dark block there is little evidence of shadow. Labels in the echo's gradual onset just
 before each first echo are left out (`onset_valid`).
+
+Only the dark blocks are scored, by :math:`\log(1 - p)`: the bins of a lit block are scored by
+the ping factor's gamma density (or the match factor), so scoring the lit label as well would
+count those intensities twice. Each intensity enters one likelihood term.
 """
 import jax
 import jax.numpy as jnp
@@ -53,7 +57,7 @@ def _blocks(x, block: int):
 
 
 def block_labels(y, theta: Theta, side: int, dr: float) -> np.ndarray:
-    r"""Lit (True) / shadow (False) label of each block (n_blocks,) from measured intensities y (n_bins,)."""
+    r"""Lit (True) / shadow (False) label of each block (..., n_blocks) from measured intensities y (..., n_bins)."""
     st = theta.at(side)
     y = np.asarray(y, dtype=float)
     g = np.exp(np.asarray(log_gain(bin_ranges(y.shape[-1], dr), st.gain_db)))
@@ -100,12 +104,16 @@ def lit_probability(S, log_kappa, theta: Theta, side: int):
 
 
 def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None):
-    r""":math:`\sum_j \log p(\ell_j \mid d)` over the valid blocks of one side; `log_kappa` is held fixed."""
+    r""":math:`\sum_j \log(1 - p_j)` over the valid dark blocks of one side; `log_kappa` is held fixed.
+
+    Lit blocks are left to the ping factor, which scores their intensities.
+    """
     p = lit_probability(S, jax.lax.stop_gradient(log_kappa), theta, side)
     p = jnp.clip(p, 1e-12, 1.0 - 1e-12)
-    labels = jnp.asarray(labels, dtype=bool)
-    lp = jnp.where(labels, jnp.log(p), jnp.log1p(-p))
-    return jnp.sum(lp if valid is None else jnp.where(jnp.asarray(valid, dtype=bool), lp, 0.0))
+    dark = ~jnp.asarray(labels, dtype=bool)
+    if valid is not None:
+        dark = dark & jnp.asarray(valid, dtype=bool)
+    return jnp.sum(jnp.where(dark, jnp.log1p(-p), 0.0))
 
 
 def onset_valid(r0, n_blocks: int, block_dr: float, onset: float = 1.5) -> np.ndarray:
@@ -157,7 +165,7 @@ def water_column_lit_rate(labels: list, r0: list, block_dr: float, onset: float 
 
 def log_shadow_factor(mesh: M.Mesh, d, pose, labels, theta: Theta, u, dr: float, n_bins: int, log_kappa,
                       valid=None):
-    r"""Log shadow factor :math:`\sum_c \sum_j \log p(\ell_{c,j} \mid d)` of one ping.
+    r"""Log shadow factor :math:`\sum_c \sum_{j\,\mathrm{dark}} \log(1 - p_{c,j})` of one ping.
 
     labels: (2, n_blocks) from `block_labels`; log_kappa: (2,) reflectivity per side, e.g.
     the ping factor's mode. Differentiable in d and the pose.

@@ -32,8 +32,7 @@ def synthetic_pass(x0, beta, rng, n=40, z=-5.0):
             vals = rng.gamma(0.5, mean / 0.5)
             fish = rng.random(N_BINS) < 0.002
             y[t, c] = np.where(fish, 1e5, vals)
-    return Pass(name=f"x{x0}", poses=poses, y=y, dr=DR, t=np.arange(n) * 0.1,
-                bathy_ping=np.zeros(0, np.int64), bathy_xyz=np.zeros((0, 3)))
+    return Pass(name=f"x{x0}", poses=poses, y=y, dr=DR, t=np.arange(n) * 0.1)
 
 
 def test_first_echo_skips_ringing_and_fish():

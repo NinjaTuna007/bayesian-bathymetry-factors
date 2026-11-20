@@ -88,47 +88,6 @@ class Mesh:
         E = np.stack([p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]], axis=1)
         return np.linalg.inv(E)
 
-    @cached_property
-    def vertex_faces(self) -> np.ndarray:
-        """(n, 6) triangles incident to each vertex, padded with -1 (fewer at the boundary)."""
-        out = np.full((self.n_vertices, 6), -1, dtype=np.int64)
-        cnt = np.zeros(self.n_vertices, dtype=np.int64)
-        for t, tri in enumerate(self.triangles):
-            for v in tri:
-                out[v, cnt[v]] = t
-                cnt[v] += 1
-        return out
-
-    @cached_property
-    def smooth_tables(self) -> dict[str, np.ndarray]:
-        """Per triangle: the vertices its smooth normals depend on, and how, for local derivatives.
-
-        ring (m, 12): the union of the corners' incident triangles' vertices, padded with the
-        first corner; corner (m, 3): local index of each corner in ring; face (m, 3, 6, 3): local
-        indices of the vertices of each corner's incident triangles; face_ok (m, 3, 6): which of
-        those are real; face_grad (m, 3, 6, 2, 2): their gradient operators.
-        """
-        m = len(self.triangles)
-        ring = np.zeros((m, 12), dtype=np.int64)
-        corner = np.zeros((m, 3), dtype=np.int64)
-        face = np.zeros((m, 3, 6, 3), dtype=np.int64)
-        face_ok = np.zeros((m, 3, 6), dtype=bool)
-        face_grad = np.zeros((m, 3, 6, 2, 2))
-        for t, tri in enumerate(self.triangles):
-            vf = self.vertex_faces[tri]  # (3, 6)
-            verts = list(dict.fromkeys(int(x) for f in vf.ravel() if f >= 0 for x in self.triangles[f]))
-            ring[t, : len(verts)] = verts
-            ring[t, len(verts):] = tri[0]
-            loc = {v: i for i, v in enumerate(verts)}
-            corner[t] = [loc[int(v)] for v in tri]
-            for c in range(3):
-                for k, f in enumerate(vf[c]):
-                    if f >= 0:
-                        face[t, c, k] = [loc[int(x)] for x in self.triangles[f]]
-                        face_ok[t, c, k] = True
-                        face_grad[t, c, k] = self._grad_ops[f]
-        return {"ring": ring, "corner": corner, "face": face, "face_ok": face_ok, "face_grad": face_grad}
-
     def to_local(self, en: np.ndarray) -> np.ndarray:
         r"""World :math:`(E, N)` to local :math:`(x, y)`."""
         return np.asarray(en, dtype=float) - np.asarray(self.origin)
@@ -220,33 +179,5 @@ def normal(mesh: Mesh, d, q):
     tri, _, inside = locate(mesh, q)
     g = face_gradient(mesh, d)[tri]
     n = jnp.concatenate([g, jnp.ones_like(g[..., :1])], axis=-1)
-    n = n / jnp.linalg.norm(n, axis=-1, keepdims=True)
-    return jnp.where(inside[..., None], n, jnp.nan)
-
-
-def vertex_normals(mesh: Mesh, d):
-    r"""(n, 3) unit vertex normals: the mean of the incident faces' upward normals :math:`(\nabla d, 1)/\lVert\cdot\rVert`.
-
-    All triangles of the lattice have the same area, so the area-weighted mean is the plain mean.
-    """
-    g = face_gradient(mesh, d)
-    nf = jnp.concatenate([g, jnp.ones_like(g[:, :1])], axis=-1)
-    nf = nf / jnp.linalg.norm(nf, axis=-1, keepdims=True)
-    tri = jnp.asarray(mesh.triangles)
-    acc = jnp.zeros((mesh.n_vertices, 3), dtype=nf.dtype)
-    for c in range(3):
-        acc = acc.at[tri[:, c]].add(nf)
-    return acc / jnp.linalg.norm(acc, axis=-1, keepdims=True)
-
-
-def smooth_normal(mesh: Mesh, d, q):
-    r"""Smooth upward unit normal (..., 3) at local points q: barycentric blend of the vertex normals; NaN off the mesh.
-
-    The seabed stays piecewise flat; only the normal used for shading varies continuously
-    across triangles (Phong shading), so the predicted intensity has no steps at edges.
-    """
-    tri, bary, inside = locate(mesh, q)
-    vn = vertex_normals(mesh, d)[jnp.asarray(mesh.triangles)[tri]]  # (..., 3, 3)
-    n = jnp.sum(bary[..., None] * vn, axis=-2)
     n = n / jnp.linalg.norm(n, axis=-1, keepdims=True)
     return jnp.where(inside[..., None], n, jnp.nan)

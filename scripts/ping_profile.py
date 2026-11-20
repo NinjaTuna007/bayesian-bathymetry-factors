@@ -69,7 +69,7 @@ def main():
         source = args.depths.stem
         print(f"seabed from {args.depths}: {mesh.n_vertices} vertices, z_ref = {mesh.z_ref:.2f}")
     else:
-        mesh, d, seen = seabed_on_mesh(bathymetry_world(ps), z_ref)
+        mesh, d, seen = seabed_on_mesh(bathymetry_world(args.patches, ps), z_ref)
         source = "3DSS seabed"
         print(f"mesh {mesh.n_vertices} vertices, {seen.mean():.0%} with 3DSS points; "
               f"depth {np.percentile(d[seen], 1):.1f}–{np.percentile(d[seen], 99):.1f} m below z_ref = {z_ref:.2f}")

@@ -61,7 +61,7 @@ def test_mass_conservation(m, th):
     P, n, inside = G.samples(m, d, pose, STARBOARD, U)
     a, r = G.echo(th, pose, STARBOARD, P, n)
     a = a * G.horizon_visibility(P, G.pose_frame(pose)[0], U, th.shadow_margin, th.wavelength)
-    # a sample at x = r / Δr keeps the part of its split that lands on bins 0 .. N-1
+    # a sample at :math:`x = r / \Delta r` keeps the part of its split that lands on bins 0 .. N-1
     kept = np.clip(N_BINS - np.asarray(r) / DR, 0.0, 1.0)
     w = np.asarray(a * Rn.curve_length(P[:, :2]))
     expect = float(np.sum((w * kept)[np.asarray(inside)]))
@@ -71,7 +71,7 @@ def test_mass_conservation(m, th):
 def test_shadow_behind_crest_and_its_gradient(m, th):
     """Bins behind a crest are dark, and lowering the crest (deeper there) lights the shadow."""
     v = m.vertices
-    x_c = 8.0  # crest 5 m below the sonar; its line of sight meets the seabed at x_c · D / 5
+    x_c = 8.0  # crest 5 m below the sonar; its line of sight meets the seabed at :math:`x_c D / 5`
     crest = jnp.asarray((np.abs(v[:, 0] - x_c) < 1.0).astype(float))
     d = jnp.full(m.n_vertices, DEPTH) - 10.0 * crest
     S = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, th, U, N_BINS, DR))

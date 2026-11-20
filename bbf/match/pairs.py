@@ -25,7 +25,7 @@ import numpy as np
 
 from bbf import mesh as M
 from bbf.ping import geometry as G
-from bbf.ping.factor import DB_TO_LOG_I, bin_ranges
+from bbf.ping.factor import bin_ranges, log_gain
 from bbf.ping.theta import Theta
 
 
@@ -44,7 +44,7 @@ class Pairs:
 
     @property
     def sign(self) -> np.ndarray:
-        r"""Side offset sign :math:`\sigma_m = c'_m - c_m`: +1 port→starboard, −1 the reverse, 0 same side."""
+        r"""Side offset sign :math:`\sigma_m = c'_m - c_m`: :math:`+1` from port to starboard, :math:`-1` the reverse, 0 on the same side."""
         return self.side_b - self.side_a
 
 
@@ -52,7 +52,7 @@ def swath_box(poses, max_range: float) -> tuple[float, float, float, float]:
     """Axis-aligned box (xmin, xmax, ymin, ymax) holding every ping's swath, from the poses (n, 6)."""
     poses = np.asarray(poses)
     yaw = poses[:, 5]
-    sx, sy = max_range * np.cos(yaw), -max_range * np.sin(yaw)  # starboard = (cos ψ, −sin ψ)
+    sx, sy = max_range * np.cos(yaw), -max_range * np.sin(yaw)  # starboard is :math:`(\cos\psi, -\sin\psi)`
     ex = np.concatenate([poses[:, 0] + sx, poses[:, 0] - sx])
     ey = np.concatenate([poses[:, 1] + sy, poses[:, 1] - sy])
     return float(ex.min()), float(ex.max()), float(ey.min()), float(ey.max())
@@ -68,7 +68,7 @@ def draw_overlap(poses_a, poses_b, max_range: float, n: int, rng=None) -> np.nda
 
 
 def project(mesh: M.Mesh, d, poses, q, n_bins: int, dr: float):
-    r"""Ping, side and bin (m,) each that a pass sees seabed point :math:`P(q)` in; −1 where unseen.
+    r"""Ping, side and bin (m,) each that a pass sees seabed point :math:`P(q)` in; :math:`-1` where unseen.
 
     The ping is the one whose plane passes nearest :math:`P(q)`, among pings within the
     maximum range horizontally, and only if the planes pass on both sides of it (so a
@@ -99,11 +99,14 @@ def project(mesh: M.Mesh, d, poses, q, n_bins: int, dr: float):
     return ping, side, bins
 
 
-def select_pairs(proj_a, proj_b, S_a, S_b, y_a, y_b, theta: Theta, dr: float, margin: float = 10.0) -> Pairs:
+def select_pairs(proj_a, proj_b, S_a, S_b, y_a, y_b, theta: Theta, dr: float, margin: float = 10.0,
+                 taken_a=None, taken_b=None) -> Pairs:
     """Matched pairs from the two passes' projections of the same draws.
 
     proj_a, proj_b: (ping, side, bin) from `project`; S_a, S_b: (n, 2, B) unit intensities
     of every ping of each pass at the current depths; y_a, y_b: (n, 2, B) intensities.
+    taken_a, taken_b: (n, 2, B) bins already in a pair with a third pass, left out so that
+    each bin is in at most one pair.
     """
     pa, ca, ba = (np.asarray(x) for x in proj_a)
     pb, cb, bb = (np.asarray(x) for x in proj_b)
@@ -120,6 +123,10 @@ def select_pairs(proj_a, proj_b, S_a, S_b, y_a, y_b, theta: Theta, dr: float, ma
         stat = ya / (ga * Sa) + yb / (gb * Sb)
         thresh = 2 * margin * np.maximum(Na / Sa, Nb / Sb)
     keep = usable & (stat > thresh)
+    if taken_a is not None:
+        keep &= ~np.asarray(taken_a)[pa, ca, ba]
+    if taken_b is not None:
+        keep &= ~np.asarray(taken_b)[pb, cb, bb]
     idx = np.flatnonzero(keep)
     # one pair per bin: the first draw that uses a bin of pass a, then of pass b, wins
     for p_, c_, b_ in ((pa, ca, ba), (pb, cb, bb)):
@@ -131,8 +138,7 @@ def select_pairs(proj_a, proj_b, S_a, S_b, y_a, y_b, theta: Theta, dr: float, ma
 
 def _gain(theta: Theta, side, r):
     """Receiver gain :math:`g_c(r)` for each (side, range) pair."""
-    g = np.asarray(theta.gain_db)[side]
-    return np.exp(DB_TO_LOG_I * (g[:, 0] + g[:, 1] * r + g[:, 2] * np.log10(r)))
+    return np.exp(np.asarray(log_gain(r, np.asarray(theta.gain_db)[side])))
 
 
 def matched_mask(pairs: Pairs, n_pings: int, n_bins: int, which: str) -> np.ndarray:

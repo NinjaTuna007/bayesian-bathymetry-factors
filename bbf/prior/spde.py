@@ -14,7 +14,7 @@ mass matrix and :math:`S` the stiffness matrix of the hat functions. This is
 standard deviation away from the boundary. Lumping :math:`C` keeps :math:`\Lambda` sparse.
 
 On the equilateral lattice every triangle has area :math:`\frac{\sqrt{3}}{4} h^2` and
-angles of 60°, so
+angles of :math:`60^\circ`, so
 
 .. math::
 

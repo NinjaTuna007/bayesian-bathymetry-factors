@@ -36,6 +36,7 @@ from bbf.ping.theta import Theta
 
 DB_TO_LOG_I = math.log(10) / 10  # gain in dB of amplitude to natural log of intensity
 NEWTON_ITERS = 50
+WARM_ITERS = 8  # damped Newton iterations of a mode warm-started from a nearby one
 MAX_STEP = 1.0  # largest damped Newton step in :math:`u`
 
 
@@ -45,8 +46,13 @@ def bin_ranges(n_bins: int, dr: float):
 
 
 def log_gain(r, gain_db):
-    r""":math:`\log g_c(r)` from `gain_db` :math:`(g_0, g_1, g_2)`: :math:`\tfrac{\ln 10}{10}(g_0 + g_1 r + g_2 \log_{10} r)`."""
-    return DB_TO_LOG_I * (gain_db[0] + gain_db[1] * r + gain_db[2] * jnp.log10(r))
+    r""":math:`\log g_c(r)` from `gain_db` :math:`(g_0, g_1, g_2)`: :math:`\tfrac{\ln 10}{10}(g_0 + g_1 r + g_2 \log_{10} r)`.
+
+    gain_db is (..., 3) and broadcasts against r, e.g. one side's (3,) over every bin, or
+    (m, 3) rows of per-pair sides against (m,) ranges.
+    """
+    gain_db = jnp.asarray(gain_db)
+    return DB_TO_LOG_I * (gain_db[..., 0] + gain_db[..., 1] * r + gain_db[..., 2] * jnp.log10(r))
 
 
 def predicted(S, u, theta: Theta, side: int, dr: float):
@@ -109,11 +115,24 @@ def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NE
         return u + jnp.clip(dF(u) / h, -MAX_STEP, MAX_STEP)
 
     u_star = jax.lax.stop_gradient(jax.lax.fori_loop(0, iters, step, jax.lax.stop_gradient(u0)))
+    # one plain Newton step for the implicit derivative of the mode, with the true curvature
+    # (a floor here would bend the derivative); tiny at a converged mode, and limited like the
+    # damped steps where F is flat in u (e.g. no echo predicted)
     H_star = jnp.maximum(-d2F(u_star), 1e-12)
-    # one plain Newton step for the implicit derivative of the mode; tiny at a converged mode, and
-    # limited like the damped steps where F is flat in u (e.g. no echo predicted)
     u_hat = u_star + jnp.clip(dF(u_star) / H_star, -MAX_STEP, MAX_STEP)
-    return u_hat, jnp.maximum(-d2F(u_hat), 1e-12)
+    # the Laplace curvature is floored at the prior's, as in the damped steps: where the spikes
+    # make F non-concave, the term then stays bounded instead of rewarding the flat spot
+    return u_hat, jnp.maximum(-d2F(u_hat), prior_prec)
+
+
+def laplace_ping_side(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS):
+    r"""(:math:`\log \int \prod_b p(y_b \mid S, u)\, p(u)\, \mathrm{d}u` by Laplace, :math:`\hat u`) for one side.
+
+    u0, iters: as in `mode` (a warm start and few iterations within an optimiser's loop).
+    """
+    F, _, _ = _objective(theta, side, dr, y, S, use)
+    u_hat, H = mode(theta, side, dr, y, S, use, u0=u0, iters=iters)
+    return F(u_hat) + 0.5 * math.log(2 * math.pi) - 0.5 * jnp.log(H), u_hat
 
 
 def log_ping_side(theta: Theta, side: int, dr: float, y, S, use=None):
@@ -123,9 +142,7 @@ def log_ping_side(theta: Theta, side: int, dr: float, y, S, use=None):
     all), e.g. without the matched bins. Bins with :math:`y \le 0` are always left out.
     """
     use = jnp.ones(S.shape, dtype=bool) if use is None else jnp.asarray(use, dtype=bool)
-    F, _, _ = _objective(theta, side, dr, y, S, use)
-    u_hat, H = mode(theta, side, dr, y, S, use)
-    return F(u_hat) + 0.5 * math.log(2 * math.pi) - 0.5 * jnp.log(H)
+    return laplace_ping_side(theta, side, dr, y, S, use)[0]
 
 
 def log_ping_factor(mesh: M.Mesh, d, pose, y, theta: Theta, u, dr: float, use=None):

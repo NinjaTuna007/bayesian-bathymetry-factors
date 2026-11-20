@@ -149,3 +149,13 @@ def test_factor_peaks_at_true_depths(scene):
         delta = 0.5 * np.sin(v[:, 0] / a + k) * np.cos(v[:, 1] / b)  # up to 0.5 m
         vals = [float(f(d + t * jnp.asarray(delta))) for t in ts]
         assert abs(ts[int(np.argmax(vals))]) <= 0.2
+
+
+def test_mode_curvature_is_floored_at_the_prior():
+    """Where the data say nothing about u (no echo predicted), the Laplace curvature is the prior's, not ~0."""
+    th = make_theta(std=0.7)
+    rng = np.random.default_rng(11)
+    S = np.zeros(N_BINS)
+    y = simulate(th, 0, S, 0.0, rng)
+    _, H = F.mode(th, 0, DR, jnp.asarray(y), jnp.asarray(S), jnp.ones(N_BINS, bool))
+    assert float(H) >= 1 / 0.7**2 - 1e-9

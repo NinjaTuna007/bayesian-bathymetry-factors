@@ -21,8 +21,8 @@ from bbf import mesh as M
 from bbf.ping.theta import PORT, Theta
 
 # Proper rotations in the sonar frame whose :math:`e_y` points outboard and :math:`e_z` down.
-R_MOUNT = np.stack([np.diag([-1.0, 1, -1]),   # port: 180° about the port axis
-                    np.diag([1.0, -1, -1])])  # starboard: 180° about the forward axis
+R_MOUNT = np.stack([np.diag([-1.0, 1, -1]),   # port: :math:`180^\circ` about the port axis
+                    np.diag([1.0, -1, -1])])  # starboard: :math:`180^\circ` about the forward axis
 _NED_TO_ENU = np.array([[0.0, 1, 0], [1, 0, 0], [0, 0, -1]])
 _FLU_TO_FRD = np.diag([1.0, -1, -1])
 
@@ -45,10 +45,20 @@ def pose_frame(pose):
 
 
 def _depth(mesh: M.Mesh, d, q):
-    """Depth at q and whether q is on the mesh; finite everywhere (extrapolated off the mesh)."""
+    """Depth at q and whether q is on the mesh; finite everywhere, but meaningless off the mesh."""
     tri, bary, inside = M.locate(mesh, q)
     dv = jnp.asarray(d)[jnp.asarray(mesh.triangles)[tri]]
     return jnp.sum(dv * bary, axis=-1), tri, inside
+
+
+def side_frame(pose, side: int):
+    r"""Sonar position :math:`s`, heading :math:`h = R e_x`, :math:`\lVert h_{xy} \rVert`, and the horizontal forward and outboard unit axes of a side."""
+    s, R = pose_frame(pose)
+    hd = R[:, 0]
+    nxy = jnp.linalg.norm(hd[:2])
+    fwd = hd[:2] / nxy
+    out = jnp.array([-fwd[1], fwd[0]]) if side == PORT else jnp.array([fwd[1], -fwd[0]])
+    return s, hd, nxy, fwd, out
 
 
 def trace(mesh: M.Mesh, d, pose, side: int, u, iters: int = 3):
@@ -59,11 +69,7 @@ def trace(mesh: M.Mesh, d, pose, side: int, u, iters: int = 3):
     plane, :math:`w = -h_z (z_\mathrm{ref} - d(q) - s_z) / \lVert h_{xy} \rVert`, iterated
     because :math:`d(q)` depends on :math:`w`.
     """
-    s, R = pose_frame(pose)
-    hd = R[:, 0]
-    nxy = jnp.linalg.norm(hd[:2])
-    fwd = hd[:2] / nxy
-    out = jnp.array([-fwd[1], fwd[0]]) if side == PORT else jnp.array([fwd[1], -fwd[0]])
+    s, hd, nxy, fwd, out = side_frame(pose, side)
     u = jnp.asarray(u)
     w = jnp.zeros_like(u)
     for _ in range(iters):
@@ -73,20 +79,12 @@ def trace(mesh: M.Mesh, d, pose, side: int, u, iters: int = 3):
     return s[:2] + u[:, None] * out + w[:, None] * fwd
 
 
-def samples(mesh: M.Mesh, d, pose, side: int, u, smooth: bool = False):
-    r"""Seabed points :math:`P_k` (K, 3), upward normals :math:`n_k` (K, 3), and an on-mesh mask (K,).
-
-    Normals are the triangles' own, or with `smooth` the vertex normals blended across each triangle.
-    """
+def samples(mesh: M.Mesh, d, pose, side: int, u):
+    r"""Seabed points :math:`P_k` (K, 3), upward face normals :math:`n_k` (K, 3), and an on-mesh mask (K,)."""
     q = trace(mesh, d, pose, side, u)
     depth, tri, inside = _depth(mesh, d, q)
-    if smooth:
-        _, bary, _ = M.locate(mesh, q)
-        vn = M.vertex_normals(mesh, d)[jnp.asarray(mesh.triangles)[tri]]
-        n = jnp.sum(bary[..., None] * vn, axis=-2)
-    else:
-        g = M.face_gradient(mesh, d)[tri]
-        n = jnp.concatenate([g, jnp.ones_like(g[:, :1])], axis=-1)
+    g = M.face_gradient(mesh, d)[tri]
+    n = jnp.concatenate([g, jnp.ones_like(g[:, :1])], axis=-1)
     n = n / jnp.linalg.norm(n, axis=-1, keepdims=True)
     P = jnp.concatenate([q, (mesh.z_ref - depth)[:, None]], axis=-1)
     return P, n, inside
@@ -109,7 +107,7 @@ def echo(theta: Theta, pose, side: int, P, n):
     e = v / r[:, None]
     beta = jnp.arctan2(e @ axes[:, 2], e @ axes[:, 1])
     cos_phi = jnp.maximum(-jnp.sum(n * e, axis=-1), 0.0)
-    B = jnp.exp(-4 * math.log(2) * (beta - theta.beta0) ** 2 / theta.omega**2)
+    B = jnp.exp(-4 * math.log(2) * (beta - theta.beta0[side]) ** 2 / theta.omega[side] ** 2)
     return B * cos_phi**2 * jnp.exp(-4 * theta.alpha * r) / r**3, r
 
 
@@ -136,7 +134,17 @@ def _running_max(alpha):
     return jax.lax.associative_scan(pick, (alpha, jnp.arange(alpha.shape[0])))
 
 
-def horizon_visibility(P, s, u, margin: float, wavelength: float):
+def elevation(P, s, inside=None):
+    r"""Elevation angle :math:`\alpha_k = \operatorname{atan2}(z_k - s_z, \lVert q_k - s_{xy} \rVert)` (K,) of points P (K, 3) seen from s.
+
+    Points off the mesh (`inside` False) get :math:`-\pi/2`, so they never cast a horizon: their
+    depth is not the seabed's.
+    """
+    alpha = jnp.arctan2(P[:, 2] - s[2], jnp.linalg.norm(P[:, :2] - s[:2], axis=-1))
+    return alpha if inside is None else jnp.where(inside, alpha, -jnp.pi / 2)
+
+
+def horizon_visibility(P, s, u, margin: float, wavelength: float, inside=None):
     r"""Visibility :math:`V_k` (K,) of curve samples P (K, 3) from the sonar at s, with diffraction.
 
     The ray to a sample lies in the ping plane, as does the curve. Seen from the sonar,
@@ -155,9 +163,10 @@ def horizon_visibility(P, s, u, margin: float, wavelength: float):
     Diffraction makes the shadow edge soft on the scale of the Fresnel zone and leaves a
     small echo deep in shadow whose relative change with depth stays finite, so gradients
     reach the crest and the seabed it hides. The margin keeps a sample from being shadowed
-    by its own face. Samples must be ordered outboard by u (K,).
+    by its own face. Samples must be ordered outboard by u (K,); those off the mesh (`inside`
+    False) cast no horizon.
     """
-    alpha = jnp.arctan2(P[:, 2] - s[2], jnp.linalg.norm(P[:, :2] - s[:2], axis=-1))
+    alpha = elevation(P, s, inside)
     u = np.asarray(u)
     idx = np.searchsorted(u, u - margin, side="right") - 1  # last sample at least `margin` closer
     has = jnp.asarray(idx >= 0)

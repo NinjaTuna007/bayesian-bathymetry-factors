@@ -1,18 +1,23 @@
-r"""Starting point of inference: the mesh over the passes and a plane through the first echoes.
+r"""Starting point of inference: the mesh over the passes and the first echoes.
 
 Each ping's first echo is the nearest seabed in range. Its slant range :math:`r_0`, where the
 intensity first jumps far above the water column (`first_echo`), puts a seabed point roughly
 below the sonar at
-:math:`(x_t, y_t, z_t - r_0)`. A robust plane through those points gives the starting
-depths :math:`d_0 = X \beta_0` and the trend coefficients :math:`\beta_0`.
+:math:`(x_t, y_t, z_t - r_0)`. A robust plane through those points gives the trend
+coefficients :math:`\beta_0` (and the plane depths :math:`X \beta_0`), and the GMRF conditional mean
+given the points gives starting depths that follow the relief under the tracks
+(`depths_from_points`).
 """
 import numpy as np
+import scipy.sparse as sp
+from sksparse.cholmod import cho_factor
 
 from bbf import mesh as M
 from bbf.io import Pass
 from bbf.match.pairs import swath_box
 from bbf.ping.factor import bin_ranges, log_gain
 from bbf.ping.theta import Theta
+from bbf.prior import Prior
 
 
 def mesh_for_passes(passes: list[Pass], h: float = 0.5, buffer: float = 10.0) -> M.Mesh:
@@ -89,3 +94,22 @@ def initial_depths(mesh: M.Mesh, beta: np.ndarray) -> np.ndarray:
     r"""Vertex depths :math:`d_0 = X \beta` of the plane."""
     v = mesh.vertices
     return beta[0] * v[:, 0] + beta[1] * v[:, 1] + beta[2]
+
+
+def depths_from_points(mesh: M.Mesh, points: np.ndarray, prior: Prior, sigma_obs: float = 0.5) -> np.ndarray:
+    r"""Mesh depths from world seabed points: vertex averages, conditional mean of the GMRF elsewhere.
+
+    Each point counts as an observation of its nearest vertex's depth with standard deviation
+    `sigma_obs`; the result maximises :math:`\log p(d \mid \beta) + \sum \log \mathcal{N}(\text{obs} \mid d, \sigma_\mathrm{obs}^2)`
+    at the prior's trend mean.
+    """
+    q = mesh.to_local(points[:, :2])
+    tri, bary, inside = (np.asarray(a) for a in M.locate(mesh, q))
+    vert = mesh.triangles[tri, np.argmax(bary, axis=1)][inside]
+    depth = (mesh.z_ref - points[:, 2])[inside]
+    n = np.bincount(vert, minlength=mesh.n_vertices).astype(float)
+    total = np.bincount(vert, depth, minlength=mesh.n_vertices)
+    W = sp.diags(n / sigma_obs**2)
+    mean_trend = prior.X @ prior.mu_beta
+    rhs = prior.Lambda @ mean_trend + total / sigma_obs**2
+    return cho_factor(sp.csc_matrix(prior.Lambda + W)).solve(rhs)

@@ -8,8 +8,7 @@ from bbf.ping.theta import Theta
 
 def a_pass(y, dr=0.1):
     n = y.shape[0]
-    return Pass(name="p", poses=np.zeros((n, 6)), y=y, dr=dr, t=np.arange(n), bathy_ping=np.zeros(0, np.int64),
-                bathy_xyz=np.zeros((0, 3)))
+    return Pass(name="p", poses=np.zeros((n, 6)), y=y, dr=dr, t=np.arange(n))
 
 
 def test_coarsen_pass_centres_and_means():
