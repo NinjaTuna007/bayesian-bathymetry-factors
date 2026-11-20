@@ -31,7 +31,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, max_iter: int 
     F = data_term(problem)
     Fw = data_term(problem, warm=True)  # log-kappa modes warm-started from the last evaluation
     lay = ggn.layout(problem)
-    n, ip = lay["n"], lay["psi"]
+    n, nb, ip = lay["n"], lay["n_beta"], lay["psi"]
     free = problem.free_psi
     psi = np.asarray(psi_of(problem.theta) if psi is None else psi, dtype=float).copy()
     d, beta = np.asarray(d, dtype=float).copy(), np.asarray(beta, dtype=float).copy()
@@ -44,12 +44,12 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, max_iter: int 
         t0 = time.time()
         H = ggn.assemble(problem, J, det["S"], det["u"], det["mu"], Jb=Jb, psi=psi)
         g = np.zeros(lay["size"])
-        g[:n], g[n:n + 3] = gd, gb
+        g[:n], g[n:n + nb] = gd, gb
         if free:
             g[ip:ip + 6] = det["grad_psi"].ravel()
         diag = H.diagonal()
         accepted, new, trial = False, ell, {}
-        dd, db, dp = np.zeros(n), np.zeros(3), np.zeros((2, 3))
+        dd, db, dp = np.zeros(n), np.zeros(nb), np.zeros((2, 3))
         for _ in range(max_tries):
             damp = lam * np.maximum(diag, 1e-12)
             # psi is not damped: its diagonal sums over every bin and far exceeds its curvature once
@@ -62,7 +62,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, max_iter: int 
             except CholmodNotPositiveDefiniteError:
                 lam *= 10.0  # treat as a rejected step: more damping
                 continue
-            dd, db = delta[:n], delta[n:n + 3]
+            dd, db = delta[:n], delta[n:n + nb]
             if free:
                 dp = delta[ip:ip + 6].reshape(2, 3)
             new = value(problem, d + dd, beta + db, Fw, u0=det["u"], psi=psi + dp, keep=trial)

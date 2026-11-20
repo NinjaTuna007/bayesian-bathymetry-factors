@@ -1,6 +1,6 @@
 r"""Generalised Gauss--Newton curvature of the log posterior as a sparse augmented matrix.
 
-Variables, in order: depths :math:`d` (n), trend :math:`\beta` (3), one :math:`u = \log\kappa` per
+Variables, in order: depths :math:`d` (n), trend :math:`\beta` (3, or 1 for a constant mean), one :math:`u = \log\kappa` per
 ping-side (all passes, ping-major, port then starboard), and one side offset :math:`\mu` per
 pass pair. Keeping :math:`u` and :math:`\mu` as variables (instead of eliminating them) gives
 the same Gauss--Newton step and Laplace marginal for :math:`d`, while :math:`H` keeps :math:`d`--:math:`d`
@@ -47,13 +47,14 @@ from bbf.ping.theta import with_psi
 def layout(problem: Problem) -> dict:
     """Offsets of each variable group in the augmented vector."""
     n = problem.mesh.n_vertices
+    nb = problem.prior.n_beta
     n_u = sum(2 * len(p) for p in problem.poses)
     keys = sorted(problem.pairs)
-    u0 = np.cumsum([0] + [2 * len(p) for p in problem.poses])[:-1] + n + 3
-    mu = n + 3 + n_u
+    u0 = np.cumsum([0] + [2 * len(p) for p in problem.poses])[:-1] + n + nb
+    mu = n + nb + n_u
     n_psi = 6 if problem.free_psi else 0
-    return {"n": n, "beta": n, "u": n + 3, "u_pass": u0, "mu": mu, "keys": keys, "psi": mu + len(keys),
-            "n_psi": n_psi, "size": mu + len(keys) + n_psi}
+    return {"n": n, "beta": n, "n_beta": nb, "u": n + nb, "u_pass": u0, "mu": mu, "keys": keys,
+            "psi": mu + len(keys), "n_psi": n_psi, "size": mu + len(keys) + n_psi}
 
 
 def ping_weights(problem: Problem, S, u_hat, uses):

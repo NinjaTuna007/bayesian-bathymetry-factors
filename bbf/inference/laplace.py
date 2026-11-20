@@ -52,7 +52,7 @@ def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=Non
     var = marginal_variances(H, n_samples, rng)
     lay = ggn.layout(problem)
     n, ip = lay["n"], lay["psi"]
-    out = {"sd_d": np.sqrt(var[:n]), "sd_beta": np.sqrt(var[n:n + 3]), "H": H}
+    out = {"sd_d": np.sqrt(var[:n]), "sd_beta": np.sqrt(var[n:n + lay["n_beta"]]), "H": H}
     if problem.free_psi:
         out["sd_psi"] = np.sqrt(var[ip:ip + 6]).reshape(2, 3)
     return out

@@ -27,6 +27,8 @@ def search_trend(problem: Problem, d, beta, slopes_x, slopes_y=(0.0,), observed=
     steps of refinement per candidate. Returns the winner and a record per candidate.
     """
     d, beta = np.asarray(d, dtype=float), np.asarray(beta, dtype=float)
+    if problem.prior.n_beta != 3:
+        raise ValueError("the trend search needs a planar trend")
     X = problem.prior.X
     obs = np.ones(len(d), bool) if observed is None else np.asarray(observed, bool)
     F = data_term(problem)
