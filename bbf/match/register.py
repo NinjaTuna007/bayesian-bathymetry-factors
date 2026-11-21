@@ -176,7 +176,8 @@ def align_passes(passes: list[Pass], r0: list, z_seabed: float, min_z: float = 5
     None. The moves are estimates to start from: an offset per pass is properly an unknown of the
     graph.
     """
-    out, found = [passes[0]], [None]
+    out: list[Pass] = [passes[0]]
+    found: list[Offset | None] = [None]
     for ps, r in zip(passes[1:], r0[1:]):
         off = offset_between(passes[0], ps, r0[0], r, z_seabed, **kwargs)
         found.append(off)
