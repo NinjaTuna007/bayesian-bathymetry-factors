@@ -103,6 +103,9 @@ def load(path, keep_all: bool = False) -> Bins:
     par = {k: z[k] for k in ("dr", "k", "L", "noise", "eps", "eta", "zeta", "ell", "gain_db", "beta0", "omega", "alpha",
                              "log_kappa_mean", "log_kappa_std", "r_bin", "poses", "t", "r0", "pass_id", "z_ref")}
     par["shape"] = (n_ping, 2, n_bins)
+    par["noise_slope"] = float(z["noise_slope"]) if "noise_slope" in z.files else 0.0
+    par["noise_power"] = float(z["noise_power"]) if "noise_power" in z.files else 0.0
+    par["psi_file"] = z["psi_file"] if "psi_file" in z.files else np.full((2, 3), np.nan)
 
     def g(name):
         return f[name][ti, ci, bi].astype(float)

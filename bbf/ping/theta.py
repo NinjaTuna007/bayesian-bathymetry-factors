@@ -19,6 +19,7 @@ import numpy.typing as npt
 
 PORT, STARBOARD = 0, 1
 BEAM_CENTRE, BEAM_WIDTH = math.radians(50.0), math.radians(60.0)  # PingDSP 3DSS defaults (rad)
+NOISE_REF = 20.0  # range :math:`r_N` (m) at which the background is `Theta.noise` (see `Theta.noise_slope`)
 
 
 class SideTheta(NamedTuple):
@@ -50,7 +51,7 @@ class Theta:
     :math:`\alpha` (amplitude, Np/m, so the two-way intensity loss is :math:`e^{-4 \alpha r}`),
     receiver gain in dB of amplitude
     :math:`10 \log_{10} g_c(r) = g_{c,0} + g_{c,1} r + g_{c,2} \log_{10} r` (`gain_db`, rows
-    port and starboard), background noise :math:`N_c` (intensity before gain), gamma shape
+    port and starboard), background :math:`N_c` (intensity before gain), gamma shape
     :math:`L`, spike probability :math:`\epsilon_c`, spike level :math:`\eta_c`, ringing
     level :math:`\zeta_c` and decay length :math:`\ell_c`, and the Gaussian prior on
     :math:`\log \kappa_{t,c}` (mean `log_kappa_mean`, standard deviation `log_kappa_std`).
@@ -68,6 +69,13 @@ class Theta:
     :math:`\epsilon_B + (1 - \epsilon_B) p_\mathrm{fa}` with :math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`.
 
     `z_water` is the world height of the water surface: seabed above it returns no echo.
+
+    Background law (`bbf.ping.factor.background`), off by default: the background of a bin at
+    range :math:`r` of a ping with log transmit power :math:`o` is
+    :math:`N_c (r / r_N)^{\nu} e^{\gamma o}` with :math:`\nu` = `noise_slope`, :math:`\gamma` =
+    `noise_power` and :math:`r_N` = `NOISE_REF`. Receiver noise has :math:`\nu = \gamma = 0`;
+    volume reverberation follows the transmit power (:math:`\gamma = 1`) and, before a gain
+    that cancels the seabed's :math:`r^{-3}`, falls about as :math:`r^{-2}`.
     """
     noise: npt.ArrayLike
     L: float
@@ -87,6 +95,8 @@ class Theta:
     label_fa: float = 0.01
     wc_lit: npt.ArrayLike | None = None
     z_water: float = math.inf
+    noise_slope: float = 0.0
+    noise_power: float = 0.0
 
     def __post_init__(self):
         for name in ("noise", "eps", "eta", "zeta", "ell", "log_kappa_mean", "log_kappa_std", "beta0", "omega"):

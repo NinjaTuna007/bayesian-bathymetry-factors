@@ -43,7 +43,12 @@ from bbf.prior import Prior
 
 def labels_of(ps: Pass, theta: Theta) -> np.ndarray:
     """Lit/shadow labels (n, 2, n_blocks) of every ping-side of a pass."""
-    return np.stack([block_labels(ps.y[:, c], theta, c, ps.dr) for c in (0, 1)], axis=1)
+    return np.stack([block_labels(ps.y[:, c], theta, c, ps.dr, ps.log_power()) for c in (0, 1)], axis=1)
+
+
+def beyond(n_blocks: int, block_dr: float, min_range: float) -> np.ndarray:
+    """Blocks (n_blocks,) whose centre is at least `min_range` m from the sonar."""
+    return (np.arange(n_blocks) + 0.5) * block_dr >= min_range
 
 
 def jacobians(problem: Problem, d, xi=None) -> list[list[list]]:
@@ -77,7 +82,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           inner: int = 10, calib_every: int = 50, chunk: int = 32, seed: int = 0,
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
           refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None, callback=None,
-          log=print) -> dict:
+          min_range: float = 0.0, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -99,6 +104,10 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     (`bbf.ping.first_return`); it ties the seabed under the tracks, where the beam predicts little
     energy, to the measured range. Its r0 must come from these passes.
 
+    min_range: blocks nearer than this (m) are left out of both the ping and the shadow factor,
+    e.g. the sonar's own ringing and sensor-fixed lines in the near water column, which otherwise
+    set the spike parameters; it must stay short of the nearest seabed.
+
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
     poses = [p.local_poses(mesh.origin) for p in passes]
@@ -117,7 +126,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         # lit rate of blocks without a seabed echo, by range
         labels = [labels_of(p, theta) for p in passes]
         r0 = [first_echo(p, theta) for p in passes]
-        valid = [onset_valid(r, lab.shape[-1], block_dr, onset) for r, lab in zip(r0, labels)]
+        valid = [onset_valid(r, lab.shape[-1], block_dr, onset) & beyond(lab.shape[-1], block_dr, min_range)
+                 for r, lab in zip(r0, labels)]
         theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
         base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk,
                        valid=valid, refl=refl, kappa_offset=offsets,

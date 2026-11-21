@@ -35,6 +35,12 @@ Terms of :math:`\Delta`, each per side unless noted (`MODELS` names their combin
   :math:`v \sim \mathcal{N}(0, 0.5^2)`.
 * `smooth`: the echo spread over neighbouring bins, :math:`S' = (1 - 2w) S_b + w (S_{b-1} + S_{b+1}) + \tau S_{b-1}`.
 * `noise`: the shape :math:`L_c`, spike rate :math:`\epsilon_c` and level :math:`\eta_c` refitted.
+* `proto`: the prototype's gain per side and constant background (`scripts/prototype_theta.py`) in
+  place of the table's, for tables written with `--theta tvg`; `proto: "file"` also takes the
+  beam and the linear gain of the state the table was written at (its :math:`\psi`).
+* `ang: "plus"`: :math:`\cos^2\varphi + c`, a level the echo keeps at grazing incidence.
+* `temper`: the bin likelihood raised to this power in the fit (not in the scores), the weight
+  neighbouring pings and bins would have if their correlation were counted; `L`: the shape set to this.
 
 Scores, with blocks of 8 bins of each ping-side held out (20%):
 
@@ -70,6 +76,8 @@ import numpy as np
 from jax.experimental import sparse as jsparse
 from jax.flatten_util import ravel_pytree
 from matplotlib.colors import LinearSegmentedColormap
+from prototype_theta import GAIN_DB as PROTO_GAIN_DB
+from prototype_theta import NOISE as PROTO_NOISE
 from residual_common import DB_TO_LOG_I, SIDES, Bins, cells, load
 from scipy.optimize import minimize
 
@@ -114,6 +122,21 @@ MODELS = {
     "range-spline+beam-spline+slope": {"range": "spline", "beam": "spline", "slope": True},
     "range-spline+beam-spline+noise": {"range": "spline", "beam": "spline", "noise": True},
     "all": {"range": "spline", "beam": "spline", "ang": "spline", "slope": True, "smooth": True, "noise": True},
+    # for tables written with --theta tvg: the prototype's laws on the same bins, and the candidates on the shared gain
+    "proto": {"proto": True},
+    "proto@psi": {"proto": "file"},
+    "proto+range-pow+beam-gauss": {"proto": True, "range": "pow", "beam": "gauss"},
+    "beam-gauss+noise": {"beam": "gauss", "noise": True},
+    "beam-gauss+ang-pow": {"beam": "gauss", "ang": "pow"},
+    "beam-gauss+ang-plus": {"beam": "gauss", "ang": "plus"},
+    "beam-gauss+ang-spline": {"beam": "gauss", "ang": "spline"},
+    "beam-spline+noise": {"beam": "spline", "noise": True},
+    "beam-spline+ang-plus+noise": {"beam": "spline", "ang": "plus", "noise": True},
+    "beam-gauss+temper0.5": {"beam": "gauss", "temper": 0.5},
+    "beam-gauss+temper0.25": {"beam": "gauss", "temper": 0.25},
+    "beam-gauss+L2.4": {"beam": "gauss", "L": 2.4},
+    "beam-gauss+L1.2": {"beam": "gauss", "L": 1.2},
+    "beam-gauss+ang-plus+noise": {"beam": "gauss", "ang": "plus", "noise": True},
 }
 
 
@@ -189,6 +212,8 @@ def init_params(D: Data, spec: dict, field: str) -> dict:
         p["ang"] = np.array([2.0])
     elif kind == "mixed":
         p["ang"] = np.array([2.0, -2.0, math.log(0.2)])
+    elif kind == "plus":
+        p["ang"] = np.array([-4.0])
     elif kind == "spline":
         p["ang"] = np.zeros(len(D.knots["ang"]))
     if spec.get("slope"):
@@ -199,7 +224,8 @@ def init_params(D: Data, spec: dict, field: str) -> dict:
         g15 = DB_TO_LOG_I * (b.par["gain_db"][:, 0] + b.par["gain_db"][:, 1] * R_FLOOR + b.par["gain_db"][:, 2] * math.log10(R_FLOOR))
         p["floor"] = np.stack([np.log(sp["noise"]) + g15, np.ones(2)], axis=1)
     if spec.get("noise"):
-        p["noise"] = np.stack([np.full(2, math.log(D.L)), np.log(sp["eps"] / (1 - sp["eps"])), np.log(sp["eta"])], axis=1)
+        p["noise"] = np.stack([np.full(2, math.log(spec.get("L", D.L))), np.log(sp["eps"] / (1 - sp["eps"])),
+                               np.log(sp["eta"])], axis=1)
     return {k: jnp.asarray(v) for k, v in p.items()}
 
 
@@ -228,6 +254,24 @@ def make_model(D: Data, spec: dict, field: str, xi_fixed=None):
     m_u = jnp.asarray(sp["log_kappa_mean"][side_of_ps] + off)
     s_u = jnp.asarray(sp["log_kappa_std"][side_of_ps])
     kn = {k: jnp.asarray(v) for k, v in D.knots.items()}
+    # background before gain, per bin: the table's law (constant unless written with --theta tvg)
+    bg = c["noise"] * (r_bin / 20.0) ** float(b.par["noise_slope"]) * jnp.exp(float(b.par["noise_power"]) * off_bin)
+    L_main = float(spec.get("L", D.L))
+    temper = float(spec.get("temper", 1.0))
+    proto = spec.get("proto")
+    lB_state = lB0
+    if proto:
+        gdb = np.array(PROTO_GAIN_DB, float)
+        psi_file = np.asarray(b.par["psi_file"], float)
+        if proto == "file":
+            if not np.isfinite(psi_file).all():
+                raise ValueError("the table's state has no psi")
+            gdb[:, 1] = psi_file[:, 2]
+            # the state's beam in place of the table's
+            lB_state = _gauss(beta, jnp.asarray(psi_file[:, 0])[side], jnp.log(jnp.asarray(psi_file[:, 1])[side]))
+        gs = jnp.asarray(gdb)[side]
+        log_g = DB_TO_LOG_I * (gs[:, 0] + gs[:, 1] * r_bin + gs[:, 2] * jnp.log10(r_bin))
+        bg = jnp.asarray(PROTO_NOISE)[side] + 0.0 * r_bin
     xi_fix = None if xi_fixed is None else jnp.asarray(xi_fixed)
 
     def per_side(f, P):
@@ -243,7 +287,7 @@ def make_model(D: Data, spec: dict, field: str, xi_fixed=None):
         return 0.0
 
     def delta(p):
-        d = jnp.zeros_like(y)
+        d = lB_state - lB0
         kind = spec.get("range")
         if kind == "pow":
             d += per_side(lambda q: q[0] * jnp.log(r / R_REF) + q[1] * (r - R_REF) / 10.0, p["range"])
@@ -272,6 +316,8 @@ def make_model(D: Data, spec: dict, field: str, xi_fixed=None):
             d += jnp.logaddexp(n * lc, la - tan2 / (2 * jnp.exp(2 * ls)) - 4 * lc) - 2 * lc
         elif kind == "spline":
             d += jnp.interp(phi, kn["ang"], p["ang"])
+        elif kind == "plus":
+            d += jnp.logaddexp(2 * lc, p["ang"][0]) - 2 * lc
         if spec.get("slope"):
             d += p["slope"][ps] * (r - R_REF) / 10.0
         if spec.get("smooth"):
@@ -286,16 +332,16 @@ def make_model(D: Data, spec: dict, field: str, xi_fixed=None):
             q = p["floor"][side]
             mean = g * jnp.exp(eta_sig) + jnp.exp(q[:, 0] + q[:, 1] * jnp.log(r_bin / R_FLOOR) + off_bin)
         else:
-            mean = g * (jnp.exp(eta_sig) + c["noise"])
+            mean = g * (jnp.exp(eta_sig) + bg)
         if spec.get("noise"):
             q = p["noise"][side]
             L, eps, sp_mean = jnp.exp(q[:, 0]), jax.nn.sigmoid(q[:, 1]), mean + g * (jnp.exp(q[:, 2]) + spike - c["eta"])
         else:
-            L, eps, sp_mean = D.L, c["eps"], mean + g * spike
+            L, eps, sp_mean = L_main, c["eps"], mean + g * spike
         return jnp.logaddexp(jnp.log1p(-eps) + log_gamma(y, L, mean), jnp.log(eps) + log_gamma(y, 1.0, sp_mean)), mean
 
     def neg_log_post(p, mask):
-        ll = jnp.sum(jnp.where(mask, loglik(p)[0], 0.0))
+        ll = temper * jnp.sum(jnp.where(mask, loglik(p)[0], 0.0))
         pr = 0.5 * jnp.sum(((p["u"] - m_u) / s_u) ** 2)
         if "xi" in p:
             x = jnp.atleast_2d(p["xi"])

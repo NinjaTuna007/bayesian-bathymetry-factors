@@ -10,6 +10,7 @@ pings are retimed by their stamps (`retime`).
 The cache also holds the 3DSS bathymetry (``bathy_*``); `Pass` leaves it out, so inference
 cannot use it (diagnostic scripts read it themselves, `scripts/seabed_3dss.py`).
 """
+import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -44,6 +45,13 @@ class Pass:
     @property
     def n_bins(self) -> int:
         return self.y.shape[-1]
+
+    def shifted(self, east: float, north: float) -> "Pass":
+        """The pass with every position moved by (east, north) metres: a horizontal offset of its navigation."""
+        poses = self.poses.copy()
+        poses[:, 0] += east
+        poses[:, 1] += north
+        return dataclasses.replace(self, poses=poses)
 
     def local_poses(self, origin) -> np.ndarray:
         """Poses with x, y relative to `origin` (e.g. a mesh's), for the mesh-local frame."""

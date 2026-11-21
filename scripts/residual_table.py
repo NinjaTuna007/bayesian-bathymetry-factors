@@ -29,6 +29,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
+import tvg_theta as TVG
 from prototype_theta import EPS, GAIN_DB, L_SHAPE, NOISE
 
 from bbf import mesh as M
@@ -36,7 +37,7 @@ from bbf import prior as PR
 from bbf.inference import init as I
 from bbf.inference.calibrate import calibrate
 from bbf.inference.gauss_newton import gauss_newton
-from bbf.inference.loop import jacobians, labels_of
+from bbf.inference.loop import beyond, jacobians, labels_of
 from bbf.inference.multiscale import coarsen_pass, coarsen_theta
 from bbf.inference.objective import Problem, render, value_and_grad
 from bbf.io import load_depths, load_patch
@@ -116,6 +117,9 @@ def main():
     ap.add_argument("--no-xi", action="store_true", help="leave xi at zero: the geometry and S0 only, which is quick")
     ap.add_argument("--shift-b", type=float, nargs=2, default=[0.0, 0.0], metavar=("EAST", "NORTH"),
                     help="move pass B's positions by this much (m), to try a horizontal offset between the passes")
+    ap.add_argument("--theta", choices=("prototype", "tvg"), default="prototype",
+                    help="tvg: one gain law for both sides and the water column's background (scripts/tvg_theta.py), "
+                         "the beam at its defaults, blocks nearer than its MIN_RANGE left out; the file's psi is only recorded")
     args = ap.parse_args()
 
     passes = [load_patch(args.patches, n) for n in "AB"]
@@ -127,7 +131,13 @@ def main():
                   log_kappa_std=2.0, gain_db=GAIN_DB)
     mesh, d, extra = load_depths(args.depths)
     beta = np.asarray(extra["beta"], float)
-    if "psi" in extra:
+    min_range = 0.0
+    if args.theta == "tvg":
+        theta = dataclasses.replace(theta, gain_db=TVG.GAIN_DB, noise=TVG.NOISE, noise_slope=TVG.NOISE_SLOPE,
+                                    noise_power=TVG.NOISE_POWER, eta=10 * TVG.NOISE, zeta=100 * TVG.NOISE,
+                                    log_kappa_mean=TVG.LOG_KAPPA_MEAN)
+        min_range = TVG.MIN_RANGE
+    elif "psi" in extra:
         theta = with_psi(theta, extra["psi"])
     xi = None if args.refit_xi or "xi" not in extra else np.asarray(extra["xi"], float)
     if args.no_xi:
@@ -140,14 +150,15 @@ def main():
     u = u_grid(n_bins, dr, du=max(0.005, dr / 3))
     labels = [labels_of(p, th) for p in cp]
     r0 = [I.first_echo(p, th) for p in cp]
-    valid = [onset_valid(r, lab.shape[-1], th.block * dr) for r, lab in zip(r0, labels)]
+    valid = [onset_valid(r, lab.shape[-1], th.block * dr) & beyond(lab.shape[-1], th.block * dr, min_range)
+             for r, lab in zip(r0, labels)]
     th = dataclasses.replace(th, wc_lit=water_column_lit_rate(labels, r0, th.block * dr))
     poses = [p.local_poses(mesh.origin) for p in cp]
     offsets = [p.log_power() for p in cp]
     base = Problem(mesh=mesh, prior=prior, theta=th, poses=poses, y=[p.y for p in cp], labels=labels, u=u, dr=dr,
                    chunk=32, valid=valid, refl=Reflectivity(mesh, RHO_XI, SIGMA_XI), kappa_offset=offsets)
     log(f"k = {args.k}: {n_bins} bins of {dr * 100:.1f} cm; state {args.depths.name}, "
-        f"psi {'file' if 'psi' in extra else 'prototype'}, xi {'zero' if args.no_xi else 'file' if xi is not None else 'fitted here'}")
+        f"theta {args.theta}, psi {'file' if 'psi' in extra and args.theta == 'prototype' else 'default'}, xi {'zero' if args.no_xi else 'file' if xi is not None else 'fitted here'}")
 
     def calibrated(xi_now):
         S = render(base, d, xi=xi_now)
@@ -173,8 +184,9 @@ def main():
     feats = np.concatenate([feature_table(mesh, jnp.asarray(d), pp, tf, u, n_bins, dr, jnp.asarray(xi)) for pp in poses])
     u_hat = np.concatenate(det["u"])
     S = np.concatenate(det["S"])
-    I_bar, I_sp = (np.stack([np.asarray(predicted(S[:, c], u_hat[:, c, None], tf, c, dr)[k]) for c in (0, 1)], axis=1)
-                   for k in (0, 1))
+    off_all = np.concatenate(offsets)
+    I_bar, I_sp = (np.stack([np.asarray(predicted(S[:, c], u_hat[:, c, None], tf, c, dr, off_all[:, None])[k])
+                             for c in (0, 1)], axis=1) for k in (0, 1))
     y = np.concatenate([p.y for p in cp])
     use = np.concatenate(pb.uses()) & (y > 0)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -190,7 +202,8 @@ def main():
              gain_db=np.asarray(tf.gain_db), beta0=np.asarray(tf.beta0), omega=np.asarray(tf.omega), alpha=tf.alpha,
              log_kappa_mean=np.asarray(tf.log_kappa_mean), log_kappa_std=np.asarray(tf.log_kappa_std),
              xi=xi, d=d, mesh_h=mesh.h, mesh_x0=mesh.x0, mesh_y0=mesh.y0, mesh_rows=mesh.n_rows, mesh_cols=mesh.n_cols,
-             z_ref=mesh.z_ref, data=det["data"])
+             z_ref=mesh.z_ref, data=det["data"], noise_slope=tf.noise_slope, noise_power=tf.noise_power,
+             psi_file=np.asarray(extra["psi"], float) if "psi" in extra else np.full((2, 3), np.nan))
     log(f"wrote {args.out}: {int(use.sum())} scored bins of {use.size}")
 
 

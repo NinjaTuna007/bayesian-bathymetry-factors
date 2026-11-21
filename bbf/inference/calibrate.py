@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import minimize
 
-from bbf.ping.factor import bin_ranges, log_gain, log_gamma
+from bbf.ping.factor import background, bin_ranges, log_gain, log_gamma
 from bbf.ping.theta import Theta
 
 ELL_BOUNDS = (0.2, 20.0)  # ringing decay length (m), as in the prototype
@@ -38,13 +38,17 @@ def calibrate(y, S, use, theta: Theta, dr: float, min_log_kappa_std: float = 0.5
     logg = np.stack([np.asarray(log_gain(r, theta.at(c).gain_db)) for c in (0, 1)])
     g = np.exp(logg)
     noise = np.asarray(theta.noise, dtype=float)
+    off = np.zeros(m) if offset is None else np.asarray(offset, dtype=float)
+    # background of every bin (m, 2, B): constant per side unless it follows the range or the power
+    bg = jnp.asarray(np.stack([np.broadcast_to(np.asarray(background(theta, c, r, off[:, None])), (m, n_bins))
+                               for c in (0, 1)], axis=1))
     eps = np.asarray(theta.eps, dtype=float)
     yj, Sj, okj, gj, rj = (jnp.asarray(a) for a in (np.where(ok, y, 1.0), S, ok, g, r))
     L = theta.L
 
     def nll(x):
         log_eta, log_zeta, log_ell, u = x[0:2], x[2:4], x[4:6], x[6:].reshape(m, 2)
-        I_bar = gj * (jnp.exp(u)[..., None] * Sj + jnp.asarray(noise)[:, None])
+        I_bar = gj * (jnp.exp(u)[..., None] * Sj + bg)
         extra = jnp.exp(log_eta)[:, None] + jnp.exp(log_zeta)[:, None] * jnp.exp(-rj / jnp.exp(log_ell)[:, None])
         I_sp = I_bar + gj * extra
         lp = jnp.logaddexp(jnp.log1p(-jnp.asarray(eps))[:, None] + log_gamma(yj, L, I_bar),

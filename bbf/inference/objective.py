@@ -208,7 +208,7 @@ def data_term(problem: Problem, warm: bool = False):
             ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, u0=u0, iters=WARM_ITERS, offset=off)
         else:
             ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, offset=off)
-        return ping + log_shadow_side(th, side, lab, S, u_hat, val), u_hat
+        return ping + log_shadow_side(th, side, lab, S, u_hat, val, dr, off), u_hat
 
     psi0 = _psi(pb, None)
 

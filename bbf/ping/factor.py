@@ -9,7 +9,7 @@ For side :math:`c` with unit intensities :math:`S_b` (see `render.unit_intensity
     \bar I_b(u) = g_c(r_b) \bigl(e^u S_b + N_c\bigr), \qquad
     \bar I_{\mathrm{sp},b}(u) = \bar I_b(u) + g_c(r_b) \bigl(\eta_c + \zeta_c e^{-r_b / \ell_c}\bigr),
 
-and each bin is the mixture
+(:math:`N_c` may follow the range and the transmit power, see `background`) and each bin is the mixture
 :math:`(1 - \epsilon_c) \mathrm{Gam}(y_b \mid L, \bar I_b) + \epsilon_c \mathrm{Gam}(y_b \mid 1, \bar I_{\mathrm{sp},b})`.
 With :math:`F(u) = \sum_b \log p(y_b \mid u) + \log \mathcal{N}(u \mid m_c, s_c^2)`, the side's
 factor is the Laplace approximation
@@ -25,6 +25,7 @@ derivative :math:`-F_{ud} / F_{uu}`, the implicit derivative, so gradients with 
 the depths and the pose are exact for the approximation.
 """
 import math
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -32,7 +33,7 @@ from jax.scipy.special import gammaln
 
 from bbf import mesh as M
 from bbf.ping import render as Rn
-from bbf.ping.theta import Theta
+from bbf.ping.theta import NOISE_REF, Theta
 
 DB_TO_LOG_I = math.log(10) / 10  # gain in dB of amplitude to natural log of intensity
 NEWTON_ITERS = 50
@@ -55,12 +56,27 @@ def log_gain(r, gain_db):
     return DB_TO_LOG_I * (gain_db[..., 0] + gain_db[..., 1] * r + gain_db[..., 2] * jnp.log10(r))
 
 
-def predicted(S, u, theta: Theta, side: int, dr: float):
-    r"""Predicted mean :math:`\bar I_b` and spike mean :math:`\bar I_{\mathrm{sp},b}` (n_bins,) at :math:`u = \log\kappa`."""
+def background(theta: Theta, side: int, r, offset: Any = 0.0):
+    r"""Background :math:`N_c (r / r_N)^{\nu} e^{\gamma o}` before gain at ranges r, for log transmit power `offset` :math:`o`.
+
+    :math:`\nu` = `Theta.noise_slope` and :math:`\gamma` = `Theta.noise_power`; with both zero (the
+    default) it is the constant :math:`N_c`. offset broadcasts against r.
+    """
+    noise = theta.at(side).noise
+    if theta.noise_slope == 0.0 and theta.noise_power == 0.0:
+        return noise + 0.0 * r
+    return noise * (r / NOISE_REF) ** theta.noise_slope * jnp.exp(theta.noise_power * offset)
+
+
+def predicted(S, u, theta: Theta, side: int, dr: float, offset: Any = 0.0):
+    r"""Predicted mean :math:`\bar I_b` and spike mean :math:`\bar I_{\mathrm{sp},b}` (n_bins,) at :math:`u = \log\kappa`.
+
+    offset: the ping's log transmit power, which only the background law uses (`background`).
+    """
     st = theta.at(side)
     r = bin_ranges(S.shape[-1], dr)
     g = jnp.exp(log_gain(r, st.gain_db))
-    I_bar = g * (jnp.exp(u) * S + st.noise)
+    I_bar = g * (jnp.exp(u) * S + background(theta, side, r, offset))
     return I_bar, I_bar + g * (st.eta + st.zeta * jnp.exp(-r / st.ell))
 
 
@@ -85,7 +101,7 @@ def _objective(theta: Theta, side: int, dr: float, y, S, use, offset=0.0):
     y_safe = jnp.where(ok, y, 1.0)
 
     def F(u):
-        I_bar, I_sp = predicted(S, u, theta, side, dr)
+        I_bar, I_sp = predicted(S, u, theta, side, dr, offset)
         lp = jnp.where(ok, log_mixture(y_safe, I_bar, I_sp, theta.L, st.eps), 0.0)
         z = (u - st.log_kappa_mean - offset) / st.log_kappa_std
         return lp.sum() - 0.5 * z**2 - math.log(st.log_kappa_std) - 0.5 * math.log(2 * math.pi)
@@ -108,7 +124,7 @@ def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NE
     # start from the moment estimate :math:`\kappa \approx \sum (y/g - N) / \sum S`
     r = bin_ranges(S.shape[-1], dr)
     g = jnp.exp(log_gain(r, st.gain_db))
-    num = jnp.sum(jnp.where(ok, jnp.maximum(y_safe / g - st.noise, 0.0), 0.0))
+    num = jnp.sum(jnp.where(ok, jnp.maximum(y_safe / g - background(theta, side, r, offset), 0.0), 0.0))
     den = jnp.sum(jnp.where(ok, S, 0.0))
     good = (num > 0) & (den > 0)
     if u0 is None:

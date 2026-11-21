@@ -14,7 +14,7 @@ from sksparse.cholmod import cho_factor
 
 from bbf import mesh as M
 from bbf.io import Pass
-from bbf.ping.factor import bin_ranges, log_gain
+from bbf.ping.factor import background, bin_ranges, log_gain
 from bbf.ping.theta import Theta
 from bbf.prior import Prior
 
@@ -90,7 +90,9 @@ def first_echo(ps: Pass, theta: Theta, min_range: float = 3.0, run: int = 5, jum
     for c in (0, 1):
         st = theta.at(c)
         g = np.exp(np.asarray(log_gain(r, st.gain_db)))[:nb]
-        gb = (g * st.noise).reshape(n_blocks, theta.block).mean(axis=1)  # gain is smooth over a block
+        # gain and background are smooth over a block; the background may follow each ping's power
+        noise = np.asarray(background(theta, c, r[:nb], ps.log_power()[:, None]))
+        gb = (g * noise).reshape(-1, n_blocks, theta.block).mean(axis=2)
         m[:, c] = np.log(lin[:, c] / gb + 1e-12)
     k = np.full((ps.n_pings, 2), -1)
     for t in range(ps.n_pings):

@@ -36,3 +36,14 @@ def test_coarse_statistics_are_gamma_kL():
     assert th.L == pytest.approx(k * L) and th.block == 1
     np.testing.assert_allclose(np.asarray(th.eps), 1 - 0.98**k)
     np.testing.assert_allclose(np.asarray(th.eta), 1.0)
+
+
+def test_coarsen_theta_takes_effective_looks():
+    """Correlated bins: the shape of the k-bin means is given instead of kL; the spike scaling stays."""
+    base = Theta(noise=1.0, L=0.5, eps=0.02, eta=9.0, zeta=18.0, ell=1.0, log_kappa_mean=0.0, log_kappa_std=1.0)
+    th = coarsen_theta(base, 9, looks=2.4)
+    ref = coarsen_theta(base, 9)
+    assert th.L == pytest.approx(2.4) and ref.L == pytest.approx(4.5)
+    for name in ("eps", "eta", "zeta"):
+        np.testing.assert_allclose(np.asarray(getattr(th, name)), np.asarray(getattr(ref, name)))
+    assert coarsen_theta(base, 1, looks=0.3).L == pytest.approx(0.3) and coarsen_theta(base, 1) is base
