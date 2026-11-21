@@ -24,7 +24,7 @@ n = pb.mesh.n_vertices
 v0, g, A, W = first_return_term(pb.mesh, s.d, pb.poses, fr)
 H = sp.csc_matrix(A.T @ sp.diags(W) @ A)
 delta = cho_factor(sp.csc_matrix(pb.prior.Lambda + H)).solve(g)
-log(f"first-return factor at k={k} {state}, sigma {fr.sigma}: value {v0:.1f}, {A.shape[0]} rows; Newton step max "
+log(f"first-return factor at k={k} {state}, sigma {fr.sigma}: value {v0:.1f}, {len(W)} rows; Newton step max "
     f"{np.abs(delta).max():.2f} m, predicted gain {g @ delta - 0.5 * delta @ (H @ delta):.1f}")
 for size in (0.03, 0.1, 0.3, 1.0):
     z = delta * size / np.abs(delta).max()
