@@ -27,7 +27,9 @@ Usage: python scripts/infer.py PATCHES.npz [--patches A B] [--out runs/<name>.np
    with weak priors; the linear gain is part of the gain law and stays held. The
    transmit power enters each ping's log-kappa prior as a known offset. The first echoes, detected
    once at full resolution, enter as the first-return factor (`bbf.ping.first_return`), which ties
-   the seabed under the tracks to the measured range.
+   the seabed under the tracks to the measured range. Every log-kappa mode is searched from a
+   grid of starts and the shadow factor is differentiated through it, so the value does not
+   depend on the last evaluation and the gradient is the value's.
 
 Uses only the intensities and the navigation; the 3DSS bathymetry is never read.
 """
@@ -60,6 +62,7 @@ SIGMA_BETA = np.array([[100.0]])  # the constant mean: sd 10 m about the median 
 LEVELS = [(27, 1, 6), (9, 1, 6), (3, 2, 6)]  # (bins averaged, rounds, Gauss-Newton steps)
 RHO_XI, SIGMA_XI = 2.0, 1.0  # range (m) and sd of the log-reflectivity field
 PSI_SD = np.array([[np.radians(10.0), np.radians(15.0), 0.5]] * 2)  # beam centre, width (rad), gain (dB/m)
+MODE_GRID = 49  # starts of each log-kappa mode search
 PSI_FREE_BEAM = np.array([[False, False, True]] * 2)  # held with --free-beam: the linear gain, part of the gain law
 
 
@@ -127,7 +130,7 @@ def main():
             extra["laplace_samples"] = 100
         out = infer(cp, mesh, prior_of(beta), th, d, beta, u, rounds=rounds, inner=inner, calib_every=50,
                     chunk=32, psi_prior=psi_prior, psi_held=psi_held, refl=refl, xi0=xi,
-                    first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=True, log=log, **extra)
+                    first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=True, mode_grid=MODE_GRID, shadow_stop=False, log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]
         theta = dataclasses.replace(theta, eta=np.asarray(to.eta) * k, zeta=np.asarray(to.zeta) * k, ell=to.ell,

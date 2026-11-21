@@ -231,3 +231,26 @@ def test_inference_fits_the_shape_after_the_field():
     assert not np.array_equal(out["problem"].labels[0], labels_of(passes[0], assumed))
     for r in out["history"]:
         assert np.all(np.diff([h["ell"] for h in r["gn"]]) > 0)
+
+
+@pytest.mark.slow
+def test_inference_passes_the_objective_switches_on():
+    """`mode_grid`, `shadow_stop` and `temper` reach the problem, and the loop ascends under them."""
+    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = np.asarray(DEPTH - 3.0 * np.exp(-((v[:, 0] - 3) ** 2 + v[:, 1] ** 2) / (2 * 4.0**2)))
+    th = P.Theta(noise=1e-7, L=0.6, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5)
+    u = P.u_grid(N_BINS, DR, du=0.05)
+    rng = np.random.default_rng(1)
+    passes = []
+    for x0 in (-6.0, 6.0):
+        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, SONAR_Z), np.zeros((9, 3))])
+        passes.append(simulate_pass(m, jnp.asarray(d_true), poses, th, u, rng, f"x{x0}"))
+    beta = np.array([0.0, 0.0, DEPTH])
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=beta, Sigma_beta=np.diag([0.01, 0.01, 4.0]))
+    out = infer(passes, m, prior, th, np.full(m.n_vertices, DEPTH), beta, u, rounds=1, inner=3, calib_every=3, chunk=4,
+                mode_grid=9, shadow_stop=False, temper=0.5, log=lambda s: None)
+    pb = out["problem"]
+    assert (pb.mode_grid, pb.shadow_stop, pb.temper) == (9, False, 0.5)
+    gn = out["history"][0]["gn"]
+    assert len(gn) > 1 and np.all(np.diff([h["ell"] for h in gn]) > 0)

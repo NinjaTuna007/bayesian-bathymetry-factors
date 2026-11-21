@@ -84,7 +84,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           inner: int = 10, calib_every: int = 50, chunk: int = 32, seed: int = 0,
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
           refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None, callback=None,
-          min_range: float = 0.0, fit_shape: bool = False, psi_held=None, log=print) -> dict:
+          min_range: float = 0.0, fit_shape: bool = False, psi_held=None, mode_grid: int = 0,
+          shadow_stop: bool = True, temper: float = 1.0, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -122,6 +123,12 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     against 3 to 5 afterwards). The labels' threshold depends on :math:`L`, so the labels and the
     spike parameters are then taken again, and stay for the later rounds.
 
+    mode_grid, shadow_stop, temper: the objective's switches (`Problem`). With `mode_grid` > 0 every
+    log-:math:`\kappa` mode is the best found from a grid of starts, so the value does not depend on
+    where the last evaluation left the modes (on the real data cold and warm values differed by
+    as much as a Gauss--Newton step gains); with `shadow_stop` False the shadow factor's gradient
+    is that of its value; `temper` scales the intensity log likelihood.
+
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
     if psi_held is not None and np.all(psi_held):
@@ -147,7 +154,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
                  for r, lab in zip(r0, labels)]
         theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
         return theta, Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr,
-                              chunk=chunk, valid=valid, refl=refl, kappa_offset=offsets, first_return=first_return)
+                              chunk=chunk, valid=valid, refl=refl, kappa_offset=offsets, first_return=first_return,
+                              mode_grid=mode_grid, shadow_stop=shadow_stop, temper=temper)
 
     def refit(theta, base, S, shape=False):
         """theta fitted at the render S on the subset of pings (`calibrate`); with shape, its gamma shape and spike rates too."""
