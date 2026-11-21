@@ -1,8 +1,8 @@
 r"""Starting point of inference: the mesh over the passes and the first echoes.
 
-Each ping's first echo is the nearest seabed in range. Its slant range :math:`r_0`, where the
-intensity first jumps far above the water column (`first_echo`), puts a seabed point roughly
-below the sonar at
+Each ping-side's first echo is the nearest seabed in range on that side. Its slant range
+:math:`r_0`, where the intensity first jumps far above the water column (`first_echo`), bounds
+the depth below the sonar; the later side's puts a seabed point roughly below it at
 :math:`(x_t, y_t, z_t - r_0)`. A robust plane through those points gives the trend
 coefficients :math:`\beta_0` (and the plane depths :math:`X \beta_0`), and the GMRF conditional mean
 given the points gives starting depths that follow the relief under the tracks
@@ -37,8 +37,22 @@ def mesh_for_passes(passes: list[Pass], h: float = 0.5, buffer: float = 10.0) ->
                    buffer=buffer, z_ref=z_ref)
 
 
+def _onset(mt, start: int, run: int, w: int, jump: float, leaked=None):
+    """First block index of the jump in log block means mt at or beyond block `start`, or None (see `first_echo`).
+
+    leaked: optional boolean per block; a candidate onset at such a block is passed over.
+    """
+    for j in range(max(start, w), len(mt) - run + 1):
+        base = np.median(mt[j - w:j])
+        if np.median(mt[j:j + run]) > base + np.log(jump):
+            k = j + int(np.argmax(mt[j:j + run] > base + 0.5 * np.log(jump)))
+            if leaked is None or not leaked[k]:
+                return k
+    return None
+
+
 def first_echo(ps: Pass, theta: Theta, min_range: float = 3.0, run: int = 5, jump: float = 20.0,
-               window: float = 2.0) -> np.ndarray:
+               window: float = 2.0, crosstalk_db: float = -34.0, leak: float = 6.0) -> np.ndarray:
     r"""Slant range (n, 2) of each ping-side's first echo; NaN where none is found.
 
     The seabed's first echo is a jump of orders of magnitude over the water column, while
@@ -48,32 +62,61 @@ def first_echo(ps: Pass, theta: Theta, min_range: float = 3.0, run: int = 5, jum
     of the preceding `window` metres by the factor `jump`; medians keep one dark speckle
     block or one fish from deciding. The echo is the first block of that run above
     :math:`\sqrt{\text{jump}}`, the half-way level in log, and its range is the block's centre.
+
+    Cross-side leakage: each channel carries a copy of the other's echo envelope some
+    :math:`35` dB down (on pass A of the 2026-07-07 line 1, port's water column under starboard's
+    bank is :math:`-38` dB of starboard's, correlated with it at 0.73 at any lag, i.e. the envelope,
+    not the speckle; port fired with starboard on 70% of pings). Block means are first cleaned
+    of `crosstalk_db` times the other side's (floored at 2% of their value), and a candidate onset
+    is still passed over when the other side has already echoed and its raw log level (no
+    gain, so the channels compare) over the same `run` blocks is more than `leak` nats higher.
+    On A this leaves port's floor ambiguous on some pings (8% none found), which the
+    first-return factor's outlier component absorbs. Port's sensor-fixed lines (strongest at
+    2.2--3.8 m on this sonar) lie inside `min_range`.
     """
-    out = np.full((ps.n_pings, 2), np.nan)
     blk = theta.block * ps.dr
     first_block = int(np.ceil(min_range / blk))
     w = max(round(window / blk), 1)
     r = np.asarray(bin_ranges(ps.n_bins, ps.dr))
+    n_blocks = ps.n_bins // theta.block
+    nb = n_blocks * theta.block
+    lin = ps.y[:, :, :nb].reshape(ps.n_pings, 2, n_blocks, theta.block).mean(axis=3)
+    lin = np.maximum(lin - 10 ** (crosstalk_db / 10) * lin[:, ::-1], 0.02 * lin)  # the other side's leak removed
+    raw = np.log(lin + 1e-300)
+    # raw level of the next `run` blocks, per block
+    pad = np.concatenate([raw, np.repeat(raw[..., -1:], run - 1, axis=-1)], axis=-1)
+    level = np.median(np.lib.stride_tricks.sliding_window_view(pad, run, axis=-1), axis=-1)
+    m = np.empty_like(raw)
     for c in (0, 1):
         st = theta.at(c)
-        g = np.exp(np.asarray(log_gain(r, st.gain_db)))
-        n_blocks = ps.n_bins // theta.block
-        z = ps.y[:, c, : n_blocks * theta.block] / (g[: n_blocks * theta.block] * st.noise)
-        m = np.log(z.reshape(ps.n_pings, n_blocks, theta.block).mean(axis=2) + 1e-12)
-        for t in range(ps.n_pings):
-            mt = m[t]
-            for j in range(max(first_block, w), n_blocks - run + 1):
-                base = np.median(mt[j - w:j])
-                if np.median(mt[j:j + run]) > base + np.log(jump):
-                    k = j + int(np.argmax(mt[j:j + run] > base + 0.5 * np.log(jump)))
-                    out[t, c] = (k + 0.5) * blk
-                    break
+        g = np.exp(np.asarray(log_gain(r, st.gain_db)))[:nb]
+        gb = (g * st.noise).reshape(n_blocks, theta.block).mean(axis=1)  # gain is smooth over a block
+        m[:, c] = np.log(lin[:, c] / gb + 1e-12)
+    k = np.full((ps.n_pings, 2), -1)
+    for t in range(ps.n_pings):
+        plain = [_onset(m[t, c], first_block, run, w, jump) for c in (0, 1)]
+        for c in (0, 1):
+            other = plain[1 - c]
+            leaked = None
+            if other is not None:
+                leaked = (np.arange(n_blocks) >= other) & (level[t, 1 - c] - level[t, c] > leak)
+            j = _onset(m[t, c], first_block, run, w, jump, leaked)
+            k[t, c] = -1 if j is None else j
+    out = np.full((ps.n_pings, 2), np.nan)
+    ok = k >= 0
+    out[ok] = (k[ok] + 0.5) * blk
     return out
 
 
 def first_echo_points(ps: Pass, r0: np.ndarray) -> np.ndarray:
-    """World seabed points (m, 3) below the sonar from the nearer first echo of each ping."""
-    r = np.nanmin(np.where(np.isfinite(r0), r0, np.inf), axis=1)
+    r"""World seabed points (m, 3) below the sonar from the later first echo of each ping.
+
+    Each side's first echo is the nearest seabed in its half of the ping plane, never farther
+    than the seabed below the sonar; on a slope the up-slope side's comes from the bank. The
+    later of the two is the tighter bound on the depth below the sonar, so it places the point.
+    """
+    fin = np.isfinite(r0)
+    r = np.where(fin.any(axis=1), np.max(np.where(fin, r0, -np.inf), axis=1), np.nan)
     ok = np.isfinite(r)
     return np.column_stack([ps.poses[ok, 0], ps.poses[ok, 1], ps.poses[ok, 2] - r[ok]])
 

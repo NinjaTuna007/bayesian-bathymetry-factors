@@ -19,6 +19,11 @@ Each step in d is likewise limited to `D_MAX_STEP` per vertex. Where the beam ba
 seabed the data curvature of a vertex is small against its gradient, and a step there was
 seen to move single vertices by 100 m on the real data, accepted because the rest of the step
 gained more than the prior charged for the spike.
+
+The sonar parameters :math:`\psi` are undamped (their diagonal is not a scale for them), so
+the step is shortened (all of it, along the Gauss--Newton direction) until :math:`\psi`'s part is
+within `PSI_MAX_STEP`, and :math:`\psi` is kept within `PSI_LO`..`PSI_HI`: on the real data a
+single step moved a beam centre by :math:`26^\circ` and sent a beam width negative.
 """
 import time
 
@@ -32,6 +37,10 @@ from bbf.ping.theta import psi_of
 
 XI_MAX_STEP = 2.0  # largest change of a vertex's log reflectivity in one step
 D_MAX_STEP = 1.0  # largest change of a vertex's depth (m) in one step
+# per side (beam centre, beam width, linear gain): the largest change in one step, and the bounds
+PSI_MAX_STEP = np.array([np.radians(3.0), np.radians(5.0), 0.1])
+PSI_LO = np.array([np.radians(5.0), np.radians(10.0), -1.0])
+PSI_HI = np.array([np.radians(85.0), np.radians(120.0), 2.0])
 
 def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_depths: bool = False,
                  max_iter: int = 10, tol: float = 1e-5, lam: float = 1e-3, max_tries: int = 10, log=print):
@@ -88,11 +97,17 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             except CholmodNotPositiveDefiniteError:
                 lam *= 10.0  # treat as a rejected step: more damping
                 continue
+            if free:
+                # a too-large psi step shortens the whole step along the Gauss--Newton direction:
+                # psi is undamped, so more damping would not shrink it, and clipping psi alone
+                # would leave the other variables' step inconsistent with it
+                over = np.max(np.abs(delta[ip:ip + 6].reshape(2, 3)) / PSI_MAX_STEP)
+                delta = delta / max(1.0, over)
             dd, db = np.clip(delta[:n], -D_MAX_STEP, D_MAX_STEP), delta[ib:ib + nb]
             if field:
                 dx = np.clip(delta[ix:ix + n], -XI_MAX_STEP, XI_MAX_STEP)
             if free:
-                dp = delta[ip:ip + 6].reshape(2, 3)
+                dp = np.clip(psi + delta[ip:ip + 6].reshape(2, 3), PSI_LO, PSI_HI) - psi
             new = value(problem, d + dd, beta + db, Fw, u0=det["u"], psi=psi + dp, keep=trial, xi=xi + dx)
             if not np.isfinite(new):
                 log(f"  GN {it}: non-finite trial value at lambda = {lam:.1e}; damping more")

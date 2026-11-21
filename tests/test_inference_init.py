@@ -66,3 +66,25 @@ def test_plane_through_first_echoes():
     d0 = I.initial_depths(mesh, b)
     v = mesh.vertices
     np.testing.assert_allclose(d0, b[0] * v[:, 0] + b[1] * v[:, 1] + b[2])
+
+
+def test_first_echo_ignores_the_other_sides_leak():
+    """Starboard sees a bank at 12 m, port the floor at 15 m; port's channel carries starboard's echo 34 dB down."""
+    rng = np.random.default_rng(3)
+    n = 40
+    poses = np.column_stack([np.zeros(n), np.linspace(-20, 20, n), np.full(n, -5.0), np.zeros((n, 3))])
+    r = np.arange(N_BINS) * DR
+    stbd = np.where(r < 12.0, 1.0, 1e5)
+    port = np.where(r < 15.0, 1.0, 1000.0) + 10 ** -3.4 * stbd
+    y = np.stack([[rng.gamma(0.5, m / 0.5) for m in (port, stbd)] for _ in range(n)])
+    r0 = I.first_echo(Pass(name="leak", poses=poses, y=y, dr=DR, t=np.arange(n) * 0.1), theta())
+    block = theta().block * DR
+    assert np.median(r0[:, 1]) == pytest.approx(12.0, abs=block)
+    assert np.median(r0[:, 0]) == pytest.approx(15.0, abs=block)  # not the leak at 12 m
+
+
+def test_start_points_take_the_later_side():
+    """The up-slope side's echo is the bank's nearest point; the later one bounds the depth below the sonar."""
+    ps = Pass(name="p", poses=np.array([[1.0, 2.0, -5.0, 0, 0, 0]]), y=np.ones((1, 2, 4)), dr=DR, t=np.zeros(1))
+    pts = I.first_echo_points(ps, np.array([[15.0, 12.0]]))
+    np.testing.assert_allclose(pts, [[1.0, 2.0, -20.0]])
