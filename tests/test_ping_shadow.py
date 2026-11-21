@@ -149,3 +149,18 @@ def test_seabed_above_the_waterline_returns_nothing():
     wet = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, th, U, N_BINS, DR))
     dry = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, dataclasses.replace(th, z_water=-25.0), U, N_BINS, DR))
     assert wet.sum() > 0 and dry.sum() == 0
+
+
+def test_gain_ratio_scales_the_predicted_block_mean():
+    """A gain above the one the labels were thresholded with predicts brighter blocks: dark ones get less likely."""
+    th = make_theta()
+    S = jnp.asarray(np.linspace(0, 5e-7, 80))
+    p1 = np.asarray(Sh.lit_probability(S, 0.0, th, STARBOARD))
+    p2 = np.asarray(Sh.lit_probability(S, 0.0, th, STARBOARD, gain_ratio=jnp.full(10, 1.5)))
+    assert (p2 > p1).all()
+    labels = np.zeros(10, bool)
+    assert float(Sh.log_shadow_side(th, STARBOARD, labels, S, 0.0, gain_ratio=jnp.full(10, 1.5))) < float(
+        Sh.log_shadow_side(th, STARBOARD, labels, S, 0.0))
+    # differentiating through log-kappa is what `stop=False` adds
+    g = jax.grad(lambda u, stop: Sh.log_shadow_side(th, STARBOARD, labels, S, u, stop=stop))
+    assert float(g(0.0, True)) == 0.0 and float(g(0.0, False)) < 0.0

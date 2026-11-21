@@ -1,0 +1,27 @@
+[14:05:25] theta fit: eta [1.16251237e+07 5.26933762e+12], zeta [4.46133202e+11 1.94369404e+08], ell [20.          1.81306256], log kappa [36.17651117 38.58536926] ± [1.64178053 1.57456963]
+[14:06:04]   GN start: ell = -2277567.3
+[14:06:39]   GN 0: ell = -2233499.8 (+44067.5), max |dd| = 0.000 m, lambda = 3.3e-04, xi sd 0.71, 36s
+[14:06:58]   GN 1: ell = -2210069.4 (+23430.4), max |dd| = 0.000 m, lambda = 1.1e-04, xi sd 0.82, 19s
+[14:07:17]   GN 2: ell = -2200489.0 (+9580.4), max |dd| = 0.000 m, lambda = 3.7e-05, xi sd 0.94, 19s
+[14:07:35]   GN 3: ell = -2195917.5 (+4571.4), max |dd| = 0.000 m, lambda = 1.2e-05, xi sd 1.00, 18s
+[14:07:53]   GN 4: ell = -2192303.1 (+3614.5), max |dd| = 0.000 m, lambda = 4.1e-06, xi sd 1.08, 18s
+[14:08:12]   GN 5: ell = -2189081.2 (+3221.8), max |dd| = 0.000 m, lambda = 1.4e-06, xi sd 1.13, 19s
+[14:08:12] fit t2tr: k=27 start every=1 {'psi': 'fixed', 'grid': '49', 'shadow_stop': '0', 'ratio': '1', 'floor': '0.5', 'clip': 'trust', 'relin': '1', 'temper': '0.2'}
+[14:08:39]   untempered data -10827841, first return -7458, prior d -192, prior xi -6923; d - d0: sd 0.00 max 0.00 m
+[14:08:39]     first-return residual A port: median -0.09 m, |res| < 0.3 m on 36%
+[14:08:39]     first-return residual A stbd: median -2.32 m, |res| < 0.3 m on 4%
+[14:08:39]     first-return residual B port: median -0.03 m, |res| < 0.3 m on 87%
+[14:08:39]     first-return residual B stbd: median -0.07 m, |res| < 0.3 m on 91%
+[14:09:15]   GN start: ell = -2187676.2
+[14:11:28]   GN 0: ell -2175395.0 actual +12281.2 pred +20609.5 (rho 0.60; raw-step pred +20609.5) lam 1.0e+00 psi-shorten 1.0 scale 1.0 raw max|dd| 0.6 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.13 fr -7060; same point from cold modes +0 133s
+[14:12:07]   GN 1: ell -2167986.3 actual +7408.7 pred +14123.3 (rho 0.52; raw-step pred +14123.3) lam 1.0e+00 psi-shorten 1.0 scale 1.0 raw max|dd| 1.0 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.13 fr -6828; same point from cold modes +0 39s
+[14:12:46]   GN 2: ell -2163302.2 actual +4684.1 pred +5637.3 (rho 0.83; raw-step pred +5637.3) lam 1.0e+00 psi-shorten 1.0 scale 1.0 raw max|dd| 0.6 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.12 fr -6668; same point from cold modes +0 39s
+[14:13:26]   GN 3: ell -2158150.0 actual +5152.2 pred +5394.6 (rho 0.96; raw-step pred +5394.6) lam 3.4e-01 psi-shorten 1.0 scale 1.0 raw max|dd| 0.7 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.12 fr -6422; same point from cold modes +0 39s
+[14:14:39]   GN 4: ell -2156140.4 actual +2009.5 pred +2419.9 (rho 0.83; raw-step pred +2419.9) lam 9.1e-01 psi-shorten 1.0 scale 1.0 raw max|dd| 0.8 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.12 fr -6303; same point from cold modes +0 73s
+[14:15:18]   GN 5: ell -2153306.1 actual +2834.3 pred +3390.6 (rho 0.84; raw-step pred +3390.6) lam 3.0e-01 psi-shorten 1.0 scale 1.0 raw max|dd| 0.7 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.11 fr -6145; same point from cold modes +0 39s
+[14:15:43]   untempered data -10666984, first return -6145, prior d -413, prior xi -5279; d - d0: sd 0.05 max 1.16 m
+[14:15:43]     first-return residual A port: median +0.02 m, |res| < 0.3 m on 49%
+[14:15:43]     first-return residual A stbd: median -2.26 m, |res| < 0.3 m on 9%
+[14:15:43]     first-return residual B port: median +0.01 m, |res| < 0.3 m on 91%
+[14:15:43]     first-return residual B stbd: median -0.00 m, |res| < 0.3 m on 94%
+[14:15:43] saved

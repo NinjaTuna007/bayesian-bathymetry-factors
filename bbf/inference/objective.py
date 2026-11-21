@@ -34,7 +34,7 @@ import numpy as np
 
 from bbf import mesh as M
 from bbf.match.reflectivity import Reflectivity
-from bbf.ping.factor import WARM_ITERS, laplace_ping_side
+from bbf.ping.factor import WARM_ITERS, bin_ranges, laplace_ping_side, log_gain
 from bbf.ping.first_return import FirstReturn, first_return_term
 from bbf.ping.render import unit_intensity
 from bbf.ping.shadow import log_shadow_side, ping_use
@@ -64,6 +64,10 @@ class Problem:
     refl: Reflectivity | None = None  # prior of the log-reflectivity field xi; None: no field
     kappa_offset: list[np.ndarray] | None = None  # per pass (n,): known shift of the log-kappa prior mean (log power)
     first_return: FirstReturn | None = None  # first echoes per ping-side; None: no first-return factor
+    temper: float = 1.0  # factor on the intensity log likelihood (ping and shadow factors): bins are not independent
+    mode_grid: int = 0  # starts of each log-kappa mode search (`bbf.ping.factor.mode`); 0: from one start
+    shadow_stop: bool = True  # hold log-kappa fixed in the shadow factor's derivative (`log_shadow_side`)
+    shadow_gain: bool = False  # score dark blocks against the gain the labels were taken with (`lit_probability`)
 
     @property
     def free_psi(self) -> bool:
@@ -208,10 +212,17 @@ def data_term(problem: Problem, warm: bool = False):
 
     def side_terms(th, side, y, S, use, lab, val, u0, off):
         if warm:
-            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, u0=u0, iters=WARM_ITERS, offset=off)
+            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, u0=u0, iters=WARM_ITERS, offset=off,
+                                            temper=pb.temper, grid=pb.mode_grid)
         else:
-            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, offset=off)
-        return ping + log_shadow_side(th, side, lab, S, u_hat, val, dr, off), u_hat
+            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, offset=off, temper=pb.temper, grid=pb.mode_grid)
+        ratio: jax.Array | float = 1.0
+        if pb.shadow_gain:  # the labels were thresholded with the gain of `pb.theta`
+            B, r = pb.theta.block, bin_ranges(pb.n_bins, dr)
+            lg = log_gain(r, th.at(side).gain_db) - log_gain(r, pb.theta.at(side).gain_db)
+            ratio = jnp.exp(lg[: pb.n_bins // B * B].reshape(-1, B).mean(axis=1))
+        return ping + pb.temper * log_shadow_side(th, side, lab, S, u_hat, val, dr, off, stop=pb.shadow_stop,
+                                                  gain_ratio=ratio), u_hat
 
     psi0 = _psi(pb, None)
 

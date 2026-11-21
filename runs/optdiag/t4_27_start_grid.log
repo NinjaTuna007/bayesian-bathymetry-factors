@@ -1,0 +1,25 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[12:36:36] mode grid 49, shadow stop False
+[12:37:33] data term at one point: cold -10893224.9; warm from the cold modes +0.0; warm again +0.0; warm from the cold modes + 0.5 +0.0
+[12:37:40]   A port: cold modes with |F'| > 1: 0.0%, with F'' > 0 (not a maximum): 0.0%; warm restart moves the mode by > 0.05 on 0.0% (max 0.00)
+[12:37:40]   A stbd: cold modes with |F'| > 1: 0.0%, with F'' > 0 (not a maximum): 0.0%; warm restart moves the mode by > 0.05 on 0.0% (max 0.00)
+[12:37:47]   B port: cold modes with |F'| > 1: 0.0%, with F'' > 0 (not a maximum): 0.0%; warm restart moves the mode by > 0.05 on 0.0% (max 0.00)
+[12:37:47]   B stbd: cold modes with |F'| > 1: 0.0%, with F'' > 0 (not a maximum): 0.0%; warm restart moves the mode by > 0.05 on 0.0% (max 0.00)
+[12:38:03] value -10921713.5 (value_and_grad -10921713.5): ping -10502150.9, shadow -391074.0, rest -28488.6
+[12:38:03] psi: gradient used vs central differences of the value (per rad, rad, dB/m), by factor
+[12:38:34]   port centre  h 2e-03: gradient    +164909.5; differences total    +164862.0 = ping      -3800.5 + shadow    +168662.5 + rest      +0.0
+[12:39:05]   port centre  h 2e-02: gradient    +164909.5; differences total    +164722.1 = ping      -3805.9 + shadow    +168528.1 + rest      +0.0
+[12:39:35]   port width   h 2e-03: gradient     -47337.6; differences total     -47335.0 = ping      -2365.8 + shadow     -44969.2 + rest      +0.0
+[12:40:05]   port width   h 2e-02: gradient     -47337.6; differences total     -47365.0 = ping      -2346.5 + shadow     -45018.6 + rest      +0.0
+[12:40:36]   port g1      h 2e-03: gradient   +1156930.5; differences total   +1156746.0 = ping      -7536.1 + shadow   +1164282.1 + rest      +0.0
+[12:41:07]   port g1      h 2e-02: gradient   +1156930.5; differences total   +1189526.1 = ping     -11321.8 + shadow   +1200847.9 + rest      +0.0
+[12:41:38]   stbd centre  h 2e-03: gradient      +1456.6; differences total      +1448.5 = ping      +1901.6 + shadow       -453.0 + rest      +0.0
+[12:42:09]   stbd centre  h 2e-02: gradient      +1456.6; differences total      +1476.2 = ping      +1939.8 + shadow       -463.6 + rest      +0.0
+[12:42:39]   stbd width   h 2e-03: gradient        +11.0; differences total        +11.5 = ping       +189.1 + shadow       -177.6 + rest      +0.0
+[12:43:09]   stbd width   h 2e-02: gradient        +11.0; differences total        +58.5 = ping       +244.6 + shadow       -186.0 + rest      +0.0
+[12:43:40]   stbd g1      h 2e-03: gradient    +504633.7; differences total    +504689.4 = ping    +503696.2 + shadow       +993.2 + rest      +0.0
+[12:44:11]   stbd g1      h 2e-02: gradient    +504633.7; differences total    +503269.7 = ping    +502295.2 + shadow       +974.5 + rest      +0.0
+[12:44:41]   along the depths gradient (max-normalised), h 1e-03: gradient     +74667.2; differences total     +70149.9 = ping     +24301.6 + shadow     +45787.5 + rest     +60.8
+[12:45:13]   along the depths gradient (max-normalised), h 1e-02: gradient     +74667.2; differences total     +58527.5 = ping     +20342.9 + shadow     +38123.9 + rest     +60.7
+[12:45:44]   along the xi gradient (max-normalised), h 1e-03: gradient     +60082.6; differences total     +60076.7 = ping      +5027.0 + shadow     +54734.6 + rest    +315.2
+[12:46:17]   along the xi gradient (max-normalised), h 1e-02: gradient     +60082.6; differences total     +60067.4 = ping      +5025.9 + shadow     +54726.3 + rest    +315.2

@@ -89,7 +89,8 @@ def noise_lit_rate(theta: Theta, side: int, n_blocks: int) -> np.ndarray:
     return rate[:n_blocks]
 
 
-def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = None, offset=0.0):
+def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = None, offset=0.0,
+                    gain_ratio: jax.Array | float = 1.0):
     r"""Predicted :math:`p(\ell_j = \text{lit} \mid d)` (n_blocks,) from the unit intensity S (n_bins,).
 
     dr, offset: the bin spacing and the ping's log transmit power, needed only when the background
@@ -103,6 +104,11 @@ def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = No
         p = p_0 + (1 - p_0) \frac{D(m) - p_\mathrm{fa}}{1 - p_\mathrm{fa}},
 
     which is :math:`p_0` where the seabed predicts nothing and tends to 1 for a strong echo.
+
+    gain_ratio (n_blocks,): the gain now over the gain the labels were thresholded with,
+    :math:`g(r_j) / g_\mathrm{label}(r_j)`. The statistic is :math:`y / (g_\mathrm{label} N)`, whose
+    predicted mean is that ratio times :math:`m`; without it a gain that grows after the labels were
+    taken makes dark blocks likelier (through a smaller :math:`\hat\kappa`) at no cost.
     """
     k = theta.block * theta.L
     if theta.noise_slope == 0.0 and theta.noise_power == 0.0:
@@ -111,20 +117,23 @@ def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = No
         raise ValueError("the background follows the range or the power: pass dr")
     else:
         noise = _blocks(background(theta, side, bin_ranges(S.shape[-1], dr), offset), theta.block)
-    m = 1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / noise
+    m = gain_ratio * (1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / noise)
     D = 1.0 - gammainc(k, k * threshold(theta) / m)
     p0 = jnp.asarray(noise_lit_rate(theta, side, m.shape[-1]))
     fa = theta.label_fa
     return p0 + (1.0 - p0) * (D - fa) / (1.0 - fa)
 
 
-def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None, dr: float | None = None, offset=0.0):
+def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None, dr: float | None = None, offset=0.0,
+                    stop: bool = True, gain_ratio: jax.Array | float = 1.0):
     r""":math:`\sum_j \log(1 - p_j)` over the valid dark blocks of one side; `log_kappa` is held fixed.
 
     Lit blocks are left to the ping factor, which scores their intensities. dr, offset: as in
-    `lit_probability`.
+    `lit_probability`. stop: hold `log_kappa` fixed in the derivative only (the value still moves
+    with it); False differentiates through it, so the gradient is that of the value. gain_ratio:
+    as in `lit_probability`.
     """
-    p = lit_probability(S, jax.lax.stop_gradient(log_kappa), theta, side, dr, offset)
+    p = lit_probability(S, jax.lax.stop_gradient(log_kappa) if stop else log_kappa, theta, side, dr, offset, gain_ratio)
     p = jnp.clip(p, 1e-12, 1.0 - 1e-12)
     dark = ~jnp.asarray(labels, dtype=bool)
     if valid is not None:

@@ -1,0 +1,41 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[12:24:58] fit psifix: k=27 start every=1 {'psi': 'fixed'}
+[12:25:43]   untempered data -10893225, first return -7458, prior d -192, prior xi -20841; d - d0: sd 0.00 max 0.00 m
+[12:25:43]     first-return residual A port: median -0.09 m, |res| < 0.3 m on 36%
+[12:25:43]     first-return residual A stbd: median -2.32 m, |res| < 0.3 m on 4%
+[12:25:43]     first-return residual B port: median -0.03 m, |res| < 0.3 m on 87%
+[12:25:43]     first-return residual B stbd: median -0.07 m, |res| < 0.3 m on 91%
+[12:26:25]   GN start: ell = -11000830.1
+[12:28:18]   GN 0: ell -10996349.3 actual +4480.9 pred -236646.2 (rho nan; raw-step pred +393767.0) lam 1.0e-03 psi-shorten 1.0 scale 1.0 raw max|dd| 540.8 m, 8700 raw > cap, 8700 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.40 fr -9604; same point from cold modes -1341 112s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=1.10e-11).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:29:32]     rejected at lambda 3.3e-04: actual -312127.8, predicted -3981565.0
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=3.35e-11).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:30:50]     rejected at lambda 3.3e-03: actual -210124.0, predicted -1416038.7
+[12:31:09]     rejected at lambda 3.3e-02: actual -60880.6, predicted +86526.2
+[12:31:37]   GN 1: ell -10953286.3 actual +43063.0 pred +216078.3 (rho 0.20; raw-step pred +947343.2) lam 3.3e-01 psi-shorten 1.0 scale 1.0 raw max|dd| 244.9 m, 2700 raw > cap, 2700 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.44 fr -10069; same point from cold modes -17030 200s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=2.12e-12).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:32:10]   GN 2: ell -10948914.9 actual +4371.4 pred +198011.1 (rho 0.02; raw-step pred +1566515.8) lam 1.1e-01 psi-shorten 1.0 scale 1.0 raw max|dd| 453.3 m, 4899 raw > cap, 4899 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.49 fr -10441; same point from cold modes -7751 33s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=1.15e-13).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:32:36]     rejected at lambda 3.7e-02: actual -59685.5, predicted +152025.2
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=1.66e-13).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:33:07]   GN 3: ell -10900216.5 actual +48698.4 pred +249459.6 (rho 0.20; raw-step pred +3801606.9) lam 3.7e-01 psi-shorten 1.0 scale 1.0 raw max|dd| 130.2 m, 2208 raw > cap, 2208 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.49 fr -9753; same point from cold modes -21535 56s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=1.37e-11).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:33:31]     rejected at lambda 1.2e-01: actual -4662.5, predicted +190338.8
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=2.89e-12).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:34:01]   GN 4: ell -10853273.2 actual +46943.3 pred +114562.9 (rho 0.41; raw-step pred +309164.4) lam 1.2e+00 psi-shorten 1.0 scale 1.0 raw max|dd| 86.1 m, 604 raw > cap, 604 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.48 fr -9380; same point from cold modes -35631 55s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:110: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=5.63e-12).
+  delta[move] = cho_factor(Hd).solve(g[move])
+[12:34:36]   GN 5: ell -10837845.3 actual +15428.0 pred +106798.1 (rho 0.14; raw-step pred +496036.6) lam 4.1e-01 psi-shorten 1.0 scale 1.0 raw max|dd| 200.8 m, 1206 raw > cap, 1206 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 1.48 fr -9072; same point from cold modes -37301 35s
+[12:35:06]   untempered data -10791525, first return -9072, prior d -7688, prior xi -21992; d - d0: sd 0.43 max 6.00 m
+[12:35:06]     first-return residual A port: median +0.43 m, |res| < 0.3 m on 30%
+[12:35:06]     first-return residual A stbd: median -1.55 m, |res| < 0.3 m on 18%
+[12:35:06]     first-return residual B port: median +0.34 m, |res| < 0.3 m on 45%
+[12:35:06]     first-return residual B stbd: median +0.21 m, |res| < 0.3 m on 53%
+[12:35:07] saved
