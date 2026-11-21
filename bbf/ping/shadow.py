@@ -9,7 +9,7 @@ labelled *lit* when its mean noise-relative intensity exceeds a threshold,
 
 with :math:`T` the :math:`1 - p_\mathrm{fa}` quantile of :math:`\mathrm{Gam}(BL, \text{mean } 1)`,
 so a noise-only block is labelled lit with probability :math:`p_\mathrm{fa}` (`Theta.label_fa`).
-Labels come from the data and are held fixed, like the matched pairs.
+Labels come from the data and are held fixed while the depths are refined.
 
 The predicted mean of that statistic is :math:`m_j = 1 + \kappa \bar S_j / N_c`, with
 :math:`\bar S_j` the block mean of the unit intensity (shadows included through the
@@ -29,7 +29,7 @@ so a dark block there is little evidence of shadow. Labels in the echo's gradual
 before each first echo are left out (`onset_valid`).
 
 Only the dark blocks are scored, by :math:`\log(1 - p)`: the bins of a lit block are scored by
-the ping factor's gamma density (or the match factor), so scoring the lit label as well would
+the ping factor's gamma density, so scoring the lit label as well would
 count those intensities twice. Each intensity enters one likelihood term.
 """
 import jax
@@ -178,16 +178,14 @@ def log_shadow_factor(mesh: M.Mesh, d, pose, labels, theta: Theta, u, dr: float,
     return total
 
 
-def ping_use(labels, n_bins: int, block: int, matched=None, valid=None):
-    """Bins (2, n_bins) the ping factor scores: those in lit blocks, minus matched bins.
+def ping_use(labels, n_bins: int, block: int, valid=None):
+    """Bins (2, n_bins) the ping factor scores: those in lit blocks.
 
-    labels: (2, n_blocks) from `block_labels`; matched: (2, n_bins) bins taken by the match
-    factor (default none); valid: (2, n_blocks) blocks to use at all (see `onset_valid`).
-    Shadow blocks are scored by the shadow factor instead, and matched bins by the match
-    factor, so each intensity enters one likelihood term.
+    labels: (2, n_blocks) from `block_labels`; valid: (2, n_blocks) blocks to use at all (see
+    `onset_valid`). Shadow blocks are scored by the shadow factor instead, so each intensity
+    enters one likelihood term.
     """
     lit = np.asarray(labels, dtype=bool)
     if valid is not None:
         lit = lit & np.asarray(valid, dtype=bool)
-    use = np.stack([np.asarray(block_mask(lit[c], n_bins, block)) for c in (0, 1)])
-    return use if matched is None else use & ~np.asarray(matched, dtype=bool)
+    return np.stack([np.asarray(block_mask(lit[c], n_bins, block)) for c in (0, 1)])

@@ -2,8 +2,8 @@ r"""Laplace approximation: posterior variances of the depths from the Gauss--New
 
 At the mode, the posterior of all unknowns is approximated by :math:`\mathcal{N}(\hat z, H^{-1})`
 with :math:`H` the augmented GGN precision (`bbf.inference.ggn`). Because :math:`u = \log\kappa` and
-:math:`\mu` are rows of :math:`H`, the marginal of :math:`d` in :math:`H^{-1}` already integrates them
-out. The variances :math:`[H^{-1}]_{ii}` are estimated without forming :math:`H^{-1}`, by
+the log-reflectivity field :math:`\xi` are rows of :math:`H`, the marginal of :math:`d` in :math:`H^{-1}`
+already integrates them out. The variances :math:`[H^{-1}]_{ii}` are estimated without forming :math:`H^{-1}`, by
 Rao--Blackwellised Monte Carlo (Sidén, Lindgren, Bolin, Villani 2018): with samples
 :math:`x \sim \mathcal{N}(0, H^{-1})` from the Cholesky factor,
 
@@ -41,18 +41,21 @@ def marginal_variances(H, n_samples: int = 200, rng=None) -> np.ndarray:
     return 1.0 / Hd + np.mean(m**2, axis=1)
 
 
-def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=None, psi=None) -> dict:
-    r"""Posterior standard deviations at the mode (d, :math:`\beta`, :math:`\psi`) with frozen Jacobians J (and Jb).
+def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=None, psi=None, xi=None) -> dict:
+    r"""Posterior standard deviations at the mode (d, :math:`\beta`, :math:`\psi`, :math:`\xi`) with frozen Jacobians J (and Jb).
 
-    Returns the depth standard deviations (n,), those of :math:`\beta` (3,), of :math:`\psi` (2, 3)
-    when it is free, and the augmented precision H it came from (undamped).
+    Returns the depth standard deviations (n,), those of :math:`\beta` (3, or 1),, of :math:`\psi` (2, 3)
+    when it is free, of :math:`\xi` (n,) when the problem has the field, and the augmented
+    precision H it came from (undamped).
     """
-    _, _, det = value_and_grad(problem, d, beta, psi=psi)
-    H = ggn.assemble(problem, J, det["S"], det["u"], det["mu"], Jb=Jb, psi=psi)
+    _, _, det = value_and_grad(problem, d, beta, psi=psi, xi=xi)
+    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi)
     var = marginal_variances(H, n_samples, rng)
     lay = ggn.layout(problem)
-    n, ip = lay["n"], lay["psi"]
-    out = {"sd_d": np.sqrt(var[:n]), "sd_beta": np.sqrt(var[n:n + lay["n_beta"]]), "H": H}
+    n, ib, ip = lay["n"], lay["beta"], lay["psi"]
+    out = {"sd_d": np.sqrt(var[:n]), "sd_beta": np.sqrt(var[ib:ib + lay["n_beta"]]), "H": H}
+    if problem.refl is not None:
+        out["sd_xi"] = np.sqrt(var[lay["xi"]:lay["xi"] + n])
     if problem.free_psi:
         out["sd_psi"] = np.sqrt(var[ip:ip + 6]).reshape(2, 3)
     return out

@@ -10,7 +10,7 @@ Side-scan sonar records intensity against slant range. The elevation of each ech
 |---|---|
 | Prior | Vertex depths, jointly, as a Gaussian Markov random field with a planar trend |
 | Ping | Port and starboard intensities of one transmission, against the intensities the mesh predicts |
-| Match | Overlapping bins from two passes that see the same patch of seabed |
+| Match | A log-reflectivity field on the mesh that every pass renders through, so passes over the same seabed must agree |
 
 Poses stay outside the graph. Navigation uncertainty is accounted for after the depths are fit, rather than by adding the poses as variables.
 
@@ -21,8 +21,8 @@ Poses stay outside the graph. Navigation uncertainty is accounted for after the 
 | [`bbf/mesh/`](bbf/mesh/README.md) | Survey mesh, hat functions, depth interpolation |
 | [`bbf/prior/`](bbf/prior/README.md) | Trend prior and the Matérn precision on the vertices |
 | [`bbf/ping/`](bbf/ping/README.md) | Ray geometry, predicted intensity, gamma mixture, ping factor |
-| [`bbf/match/`](bbf/match/README.md) | Overlap, matched bins, match factor |
-| [`bbf/inference/`](bbf/inference/README.md) | Outer loop over visibility and pairs, Laplace fit, pose uncertainty |
+| [`bbf/match/`](bbf/match/README.md) | Shared reflectivity field, cross-pass check on ground cells |
+| [`bbf/inference/`](bbf/inference/README.md) | Outer loop over visibility, Laplace fit, pose uncertainty |
 | [`bbf/io/`](bbf/io/README.md) | Pings and a navigated trajectory in, depth and covariance out |
 
 ## Data

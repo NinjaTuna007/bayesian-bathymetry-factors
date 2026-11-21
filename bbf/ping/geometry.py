@@ -51,6 +51,11 @@ def _depth(mesh: M.Mesh, d, q):
     return jnp.sum(dv * bary, axis=-1), tri, inside
 
 
+def field_at(mesh: M.Mesh, x, q):
+    r"""Hat-function interpolation :math:`\sum_i x_i \psi_i(q)` of vertex values x at q (K, 2); finite off the mesh."""
+    return _depth(mesh, x, q)[0]
+
+
 def side_frame(pose, side: int):
     r"""Sonar position :math:`s`, heading :math:`h = R e_x`, :math:`\lVert h_{xy} \rVert`, and the horizontal forward and outboard unit axes of a side."""
     s, R = pose_frame(pose)

@@ -89,13 +89,11 @@ def test_shadow_factor_lowers_seabed_behind_crest(wall_scene):
     assert np.all(np.isfinite(g)) and np.abs(g[behind]).max() > 0
 
 
-def test_ping_use_combines_labels_and_matched():
+def test_ping_use_combines_labels_and_valid():
     labels = np.array([[True, False, True], [False, True, True]])
-    matched = np.zeros((2, 26), bool)
-    matched[0, 1] = True
-    use = Sh.ping_use(labels, 26, 8, matched)
+    use = Sh.ping_use(labels, 26, 8)
     assert use.shape == (2, 26)
-    np.testing.assert_array_equal(use[0, :8], [True, False] + [True] * 6)
+    assert use[0, :8].all() and not Sh.ping_use(labels, 26, 8, valid=~labels).any()
     assert not use[0, 8:16].any() and use[0, 16:24].all() and not use[:, 24:].any()
     assert not use[1, :8].any() and use[1, 8:24].all()
 

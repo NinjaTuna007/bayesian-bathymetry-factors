@@ -1,11 +1,13 @@
 # Match factor
 
-`bbf.match`: `draw_overlap`, `project` and `select_pairs` choose the matched pairs at the current depths (outer loop), `matched_mask` gives the bins to leave out of each ping factor, and `log_match_factor` scores the pairs with the side offset profiled out. Predictions are the rendered unit intensities of `bbf.ping`, so the factor is differentiable in the depths.
+`bbf.match`: `Reflectivity` is the prior of a log-reflectivity field on the mesh vertices, and `footprints`, `cell_sums`, `cell_residual` and `ratio_score` check on ground cells how well two passes agree.
 
-A pass is a consecutive stretch of the trajectory. Its pings cover a strip on each side of the track. Two passes overlap where those strips overlap. Inside the overlap, a location that both passes see becomes a matched pair of bins.
+A pass is a consecutive stretch of the trajectory. Its pings cover a strip on each side of the track. Two passes overlap where those strips overlap.
 
-The two bins are treated as observing the same seabed reflectivity. That reflectivity is integrated out, which leaves a factor on the pair. Texture finer than a bin footprint is outside this approximation. Each bin belongs to at most one pair, so every bin enters the graph through exactly one factor.
+The seabed has one reflectivity at each location, whichever pass looks at it. That reflectivity is a field on the mesh, with a Matérn prior, and it multiplies the echo inside the render of `bbf.ping`. Every ping of every pass renders through the same field, so the ratio of two passes' echoes from the same ground is free of the ground's reflectivity and depends on the depths through the two viewing geometries. The reflectivity left to each ping and side is its gain.
 
-Which pairs exist depends on the depths. The inference loop freezes the pairs while the depths move, then rebuilds them.
+Nothing is paired. Which ground a bin covers is decided by the render at the current depths, every bin stays in its ping factor, and any number of passes share the field. The field is an unknown of the graph next to the depths.
 
-This directory builds the pairs and evaluates the factor. It does not optimise the depths.
+The cell check is a diagnostic. It sums each pass's bins over ground cells and scores the log-ratio of the two sums against the predicted one; it does not enter the posterior.
+
+This directory holds the field's prior and the check. It does not optimise the depths.

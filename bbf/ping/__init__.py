@@ -20,6 +20,7 @@ from .geometry import (
 from .render import (
     DU,
     curve_length,
+    sample_weights,
     split_into_bins,
     u_grid,
     unit_intensities,
@@ -79,6 +80,7 @@ __all__ = [
     "psi_of",
     "render_key",
     "render_theta",
+    "sample_weights",
     "samples",
     "split_into_bins",
     "threshold",

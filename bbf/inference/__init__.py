@@ -8,6 +8,7 @@ from .init import (
     initial_depths,
     mesh_for_passes,
     plane_fit,
+    swath_box,
 )
 from .jacobian import ping_side_jacobian
 from .laplace import laplace, marginal_variances, sample_precision
@@ -43,6 +44,7 @@ __all__ = [
     "sample_precision",
     "scan_pass",
     "search_trend",
+    "swath_box",
     "value",
     "value_and_grad",
 ]
