@@ -183,3 +183,33 @@ def test_off_mesh_samples_cast_no_horizon():
     on = np.asarray(inside["small"])
     assert on.any() and (~on).any()
     np.testing.assert_allclose(V["small"][on], V["big"][on], atol=1e-9)
+
+
+def test_beam_response_on_top_of_the_gaussian(m):
+    r"""`beam_knots`, `beam_log`: the echo is the Gaussian's times :math:`e^{\Delta_c(\beta)}`, per side, constant past the end knots."""
+    import dataclasses
+
+    from bbf.ping.theta import render_key, render_theta
+    th = theta()
+    knots = np.radians([20.0, 40.0, 60.0, 80.0])
+    values = np.array([[0.5, 0.0, -1.0, -3.0], [0.0, 0.2, 0.4, 0.6]])
+    sp = dataclasses.replace(th, beam_knots=knots, beam_log=values)
+    d = jnp.full(m.n_vertices, DEPTH)
+    pose = jnp.array([0, 0, SONAR_Z, 0, 0, 0])
+    u = jnp.linspace(0.5, 55.0, 110)
+    beta = np.arctan2(D, np.asarray(u))
+    assert beta.min() < knots[0] and beta.max() > knots[-1]
+    for side in (PORT, STARBOARD):
+        P, n, _ = G.samples(m, d, pose, side, u)
+        a0, _ = G.echo(th, pose, side, P, n)
+        a1, _ = G.echo(sp, pose, side, P, n)
+        np.testing.assert_allclose(np.log(np.asarray(a1) / np.asarray(a0)), np.interp(beta, knots, values[side]), atol=1e-10)
+    # it is part of what the compiled render is keyed on, and survives the round trip
+    assert render_key(sp) != render_key(th) and render_key(th)[-1] is None
+    back = render_theta(render_key(sp), np.column_stack([sp.beta0, sp.omega, np.zeros(2)]))
+    P, n, _ = G.samples(m, d, pose, PORT, u)
+    np.testing.assert_allclose(G.echo(back, pose, PORT, P, n)[0], G.echo(sp, pose, PORT, P, n)[0], rtol=1e-12)
+    with pytest.raises(ValueError):
+        dataclasses.replace(th, beam_knots=knots)
+    with pytest.raises(ValueError):
+        dataclasses.replace(th, beam_knots=knots[::-1], beam_log=values)

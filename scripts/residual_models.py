@@ -39,6 +39,8 @@ Terms of :math:`\Delta`, each per side unless noted (`MODELS` names their combin
   place of the table's, for tables written with `--theta tvg`; `proto: "file"` also takes the
   beam and the linear gain of the state the table was written at (its :math:`\psi`).
 * `ang: "plus"`: :math:`\cos^2\varphi + c`, a level the echo keeps at grazing incidence.
+* `fit_pass`: the laws are fitted on that pass alone (0 is A, 1 is B) and kept for the scores, e.g. a
+  beam calibrated on the pass over level ground.
 * `temper`: the bin likelihood raised to this power in the fit (not in the scores), the weight
   neighbouring pings and bins would have if their correlation were counted; `L`: the shape set to this.
 
@@ -137,6 +139,9 @@ MODELS = {
     "beam-gauss+L2.4": {"beam": "gauss", "L": 2.4},
     "beam-gauss+L1.2": {"beam": "gauss", "L": 1.2},
     "beam-gauss+ang-plus+noise": {"beam": "gauss", "ang": "plus", "noise": True},
+    "beam-gauss@B": {"beam": "gauss", "fit_pass": 1},
+    "beam-spline@B": {"beam": "spline", "fit_pass": 1},
+    "beam-spline@A": {"beam": "spline", "fit_pass": 0},
 }
 
 
@@ -413,7 +418,13 @@ def score(D: Data, name: str, spec: dict, init: dict | None, maxiter: int) -> tu
     """Fit candidate `name` and compute its scores; returns (scores, shared-field parameters)."""
     b = D.b
     t0 = time.time()
-    p, ll, mean = fit(D, spec, "shared", init=init, maxiter=maxiter)
+    if "fit_pass" in spec:
+        # the laws from one pass alone (its training bins), then kept while u and the field are fitted to both
+        pc, _, _ = fit(D, spec, "shared", init=init, mask=~D.test & (b.pass_id == spec["fit_pass"]), maxiter=maxiter)
+        laws = tuple(k for k in pc if k not in ("u", "xi", "slope"))
+        p, ll, mean = fit(D, spec, "shared", init={**(init or {}), **{k: pc[k] for k in laws}}, hold=laws, maxiter=maxiter)
+    else:
+        p, ll, mean = fit(D, spec, "shared", init=init, maxiter=maxiter)
     out = {"model": name, "ll_test": float(ll[D.test].mean()), "ll_train": float(ll[~D.test].mean()),
            "xi_sd": float(p["xi"][D.cover.sum(axis=0) >= 5].std())}
     radiometric = tuple(k for k in p if k not in ("u", "xi", "slope"))
@@ -437,6 +448,10 @@ def score(D: Data, name: str, spec: dict, init: dict | None, maxiter: int) -> tu
     _, rc = cell_residual(D, mean)
     out["cell_e_iqr_shared"], _ = spread(rc[1] - rc[0])
     out["ll_test_none"] = float(ll0[D.test].mean())
+    for pi, pn in enumerate("AB"):
+        for ci, cn in enumerate(SIDES):
+            m = D.test & (b.pass_id == pi) & (b.side == ci)
+            out[f"ll_test_{pn}_{cn}"] = float(ll[m].mean())
     out["time"] = time.time() - t0
     out["params"] = {k: np.round(np.asarray(v), 4).tolist() for k, v in p.items() if k in radiometric and np.size(v) <= 12}
     log(f"{name}: held-out ll/bin {out['ll_test']:+.4f} (no field {out['ll_test_none']:+.4f}, per pass {out['ll_test_pass']:+.4f}); "
