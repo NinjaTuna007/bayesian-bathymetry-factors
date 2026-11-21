@@ -8,6 +8,12 @@ accepted step and grows after a rejected one (Levenberg--Marquardt). The Jacobia
 for the whole loop; the weights are recomputed every step. With :math:`\psi` free
 (`Problem.psi_prior`) it is stepped too, with the beam derivatives of :math:`S` frozen like :math:`J`.
 The log-reflectivity field :math:`\xi` (`Problem.refl`) is stepped with the depths, in the same solve.
+
+Each step in :math:`\xi` is limited to `XI_MAX_STEP` per vertex. A bin far brighter than predicted,
+:math:`y \gg \bar I`, has the gradient :math:`L (y / \bar I - 1)` in :math:`\log \bar I` against the Fisher
+curvature :math:`L`, so the Gauss--Newton step overshoots by :math:`e^{\Delta} / \Delta` for a deficit of
+:math:`\Delta` log units; and since the spike component bounds what any one bin can lose, the
+line search would accept a vertex sent to :math:`\xi \sim 100` by such a step.
 """
 import time
 
@@ -19,6 +25,7 @@ from bbf.inference import ggn
 from bbf.inference.objective import Problem, data_term, value, value_and_grad
 from bbf.ping.theta import psi_of
 
+XI_MAX_STEP = 2.0  # largest change of a vertex's log reflectivity in one step
 
 def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_depths: bool = False,
                  max_iter: int = 10, tol: float = 1e-5, lam: float = 1e-3, max_tries: int = 10, log=print):
@@ -77,7 +84,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
                 continue
             dd, db = delta[:n], delta[ib:ib + 3]
             if field:
-                dx = delta[ix:ix + n]
+                dx = np.clip(delta[ix:ix + n], -XI_MAX_STEP, XI_MAX_STEP)
             if free:
                 dp = delta[ip:ip + 6].reshape(2, 3)
             new = value(problem, d + dd, beta + db, Fw, u0=det["u"], psi=psi + dp, keep=trial, xi=xi + dx)
