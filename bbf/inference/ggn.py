@@ -106,7 +106,8 @@ def shadow_rows(problem: Problem, S, u_hat):
     return out
 
 
-def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None, S0=None) -> sp.csc_matrix:
+def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None, S0=None,
+             fr=None) -> sp.csc_matrix:
     r"""The augmented GGN matrix :math:`H` (size from `layout`), symmetric positive semidefinite plus priors.
 
     J[p][t][c]: the frozen Jacobian of pass p, ping t, side c, (B, n) or (B, 2n) with the field.
@@ -118,6 +119,9 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
     which freezes :math:`\partial \log S_b` instead of :math:`\partial S_b`. The reflectivity multiplies
     :math:`S`, so as :math:`\xi` moves by :math:`\delta` over a bin's footprint the bin's derivatives all
     grow by :math:`e^{\delta}`, and so does :math:`S_b`: the rescaled rows follow, the frozen ones do not.
+
+    fr: the first-return factor's rows A (m, n) and weights W (m,) (`value_and_grad`'s details),
+    adding :math:`A^\top W A` to the depth block.
     """
     if psi is not None:
         problem = dataclasses.replace(problem, theta=with_psi(problem.theta, psi))
@@ -203,6 +207,10 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
     Pr = problem.prior.joint_precision().tocoo()
     at = np.concatenate([np.arange(n), lay["beta"] + np.arange(lay["n_beta"])])
     add(sp.coo_matrix((Pr.data, (at[Pr.row], at[Pr.col])), shape=(size, size)))
+    if fr is not None:
+        A, W = fr
+        Hf = (A.T @ sp.diags(W) @ A).tocoo()
+        add(sp.coo_matrix((Hf.data, (Hf.row, Hf.col)), shape=(size, size)))
     if problem.refl is not None:
         Lx = problem.refl.Lambda.tocoo()
         add(sp.coo_matrix((Lx.data, (Lx.row + lay["xi"], Lx.col + lay["xi"])), shape=(size, size)))

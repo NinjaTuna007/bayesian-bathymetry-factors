@@ -296,3 +296,33 @@ def test_laplace_reports_psi_uncertainty(problem):
     assert out["sd_psi"].shape == (2, 3) and out["sd_xi"].shape == d0.shape
     assert np.all(out["sd_xi"] > 0) and out["sd_xi"].min() < 0.7 * pbf.refl.sigma  # the data narrow the field under the swath
     assert np.all(out["sd_psi"] > 0) and np.all(out["sd_psi"] < sd)  # the data narrow every parameter
+
+
+def test_first_return_enters_value_gradient_and_ggn(problem):
+    r"""With first echoes the objective gains exactly the first-return term, and :math:`H` gains :math:`A^\top W A` on the depths."""
+    import dataclasses
+
+    from bbf.inference import ggn
+    from bbf.inference.loop import jacobians
+    from bbf.ping.first_return import FirstReturn, first_return_term
+    pb, d0, beta = problem
+    rng = np.random.default_rng(3)
+    r0 = [np.full((len(p), 2), DEPTH + SONAR_Z) + 0.2 * rng.standard_normal((len(p), 2)) for p in pb.poses]
+    fr = FirstReturn(r0)
+    pbr = dataclasses.replace(pb, first_return=fr)
+    v0, (g0, gb0), det0 = O.value_and_grad(pb, d0, beta)
+    v1, (g1, gb1), det1 = O.value_and_grad(pbr, d0, beta)
+    val, grad, A, W = first_return_term(pb.mesh, d0, pb.poses, fr)
+    assert det0["first_return"] is None
+    assert v1 - v0 == pytest.approx(val, abs=1e-6 * abs(v0))
+    assert O.value(pbr, d0, beta) == pytest.approx(v1, abs=1e-6 * abs(v1))
+    np.testing.assert_allclose(g1 - g0, grad, atol=1e-8 * np.abs(g0).max())
+    np.testing.assert_allclose(gb1, gb0)
+    J = jacobians(pb, d0, None)
+    H0 = ggn.assemble(pb, J, det0["S"], det0["u"])
+    H1 = ggn.assemble(pbr, J, det1["S"], det1["u"], fr=det1["first_return"])
+    n = pb.mesh.n_vertices
+    diff = sp.csr_matrix(H1 - H0)
+    expect = (A.T @ sp.diags(W) @ A).toarray()
+    np.testing.assert_allclose(diff[:n, :n].toarray(), expect, atol=1e-9 * abs(H0).max())
+    assert abs(diff[n:, :]).sum() < 1e-9 * abs(H0).max()  # nothing beyond the depth block

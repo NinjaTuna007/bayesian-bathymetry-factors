@@ -49,7 +49,7 @@ def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=Non
     precision H it came from (undamped).
     """
     _, _, det = value_and_grad(problem, d, beta, psi=psi, xi=xi)
-    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi)
+    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, fr=det["first_return"])
     var = marginal_variances(H, n_samples, rng)
     lay = ggn.layout(problem)
     n, ib, ip = lay["n"], lay["beta"], lay["psi"]

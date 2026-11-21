@@ -34,6 +34,7 @@ from bbf.inference.objective import Problem, beam_jacobian, render
 from bbf.io import Pass
 from bbf.match import Reflectivity
 from bbf.mesh import locate
+from bbf.ping.first_return import FirstReturn
 from bbf.ping.geometry import trace
 from bbf.ping.shadow import block_labels, onset_valid, ping_use, water_column_lit_rate
 from bbf.ping.theta import Theta, psi_of, with_psi
@@ -75,7 +76,8 @@ def observed_vertices(problem: Problem, d) -> np.ndarray:
 def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0, u, rounds: int = 3,
           inner: int = 10, calib_every: int = 50, chunk: int = 32, seed: int = 0,
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
-          refl: Reflectivity | None = None, xi0=None, callback=None, log=print) -> dict:
+          refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None, callback=None,
+          log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -92,6 +94,10 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
 
     With `laplace_samples` > 0, also the Laplace posterior standard deviations of the depths
     (`sd_d`), trend (`sd_beta`) and field (`sd_xi`) at the final mode, from that many Monte Carlo samples.
+
+    first_return: the first echoes and the first-return factor's constants
+    (`bbf.ping.first_return`); it ties the seabed under the tracks, where the beam predicts little
+    energy, to the measured range. Its r0 must come from these passes.
 
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
@@ -114,7 +120,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         valid = [onset_valid(r, lab.shape[-1], block_dr, onset) for r, lab in zip(r0, labels)]
         theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
         base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk,
-                       valid=valid, refl=refl, kappa_offset=offsets)
+                       valid=valid, refl=refl, kappa_offset=offsets,
+                       first_return=first_return)
         S = render(base, d, xi=xi)
         # 1. theta at the current depths, on a subset of pings
         sub = [np.arange(0, len(p), calib_every) for p in poses]

@@ -33,6 +33,7 @@ import numpy as np
 from bbf import mesh as M
 from bbf.match.reflectivity import Reflectivity
 from bbf.ping.factor import WARM_ITERS, laplace_ping_side
+from bbf.ping.first_return import FirstReturn, first_return_term
 from bbf.ping.render import unit_intensity
 from bbf.ping.shadow import log_shadow_side, ping_use
 from bbf.ping.theta import Theta, psi_of, render_key, render_theta, with_psi
@@ -59,6 +60,7 @@ class Problem:
     psi_prior: tuple[np.ndarray, np.ndarray] | None = None  # (mean, sd) of psi (2, 3); None: psi fixed
     refl: Reflectivity | None = None  # prior of the log-reflectivity field xi; None: no field
     kappa_offset: list[np.ndarray] | None = None  # per pass (n,): known shift of the log-kappa prior mean (log power)
+    first_return: FirstReturn | None = None  # first echoes per ping-side; None: no first-return factor
 
     @property
     def free_psi(self) -> bool:
@@ -250,6 +252,14 @@ def _args(S, u0, psi):
     return ([jnp.asarray(s) for s in S], None if u0 is None else [jnp.asarray(x) for x in u0], psi)
 
 
+def _first_return(problem: Problem, d):
+    """(value, gradient in d, (GGN rows A, weights W)) of the first-return factor; zeros and None without it."""
+    if problem.first_return is None:
+        return 0.0, np.zeros(problem.mesh.n_vertices), None
+    val, grad, A, W = first_return_term(problem.mesh, d, problem.poses, problem.first_return)
+    return val, grad, (A, W)
+
+
 def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None, xi=None):
     r""":math:`\ell(d, \beta, \psi, \xi)`, its gradient (d, :math:`\beta`), and the data term's details.
 
@@ -259,7 +269,8 @@ def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None,
     default 0. details hold the rendered S, :math:`\hat u` per pass, the data term's value and its
     gradient in d (`grad_d_data`), and
     `grad_psi` and `grad_xi`, the gradients in :math:`\psi` and :math:`\xi` (including their priors
-    when they are unknowns). S: the render at (d, :math:`\psi`, :math:`\xi`) if already done.
+    when they are unknowns), and `first_return`, the first-return factor's GGN rows and weights
+    (`ggn.assemble`) or None. S: the render at (d, :math:`\psi`, :math:`\xi`) if already done.
     """
     F = data_term(problem) if F is None else F
     psi = _psi(problem, psi)
@@ -269,10 +280,12 @@ def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None,
     gd_prior, gb_prior = problem.prior.grad(np.asarray(d), np.asarray(beta))
     lp_psi, g_psi_prior = problem.psi_log_prior(psi)
     lp_xi, g_xi_prior = problem.xi_log_prior(_xi(problem, xi))
-    value = float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta)) + lp_psi + lp_xi
+    lp_fr, g_fr, fr = _first_return(problem, d)
+    value = float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta)) + lp_psi + lp_xi + lp_fr
     details = {"S": S, "u": [np.asarray(u) for u in u_hats], "data": float(val), "grad_d_data": grad_d,
-               "grad_psi": np.asarray(g_psi_F) + g_psi_S + g_psi_prior, "grad_xi": g_xi_S + g_xi_prior}
-    return value, (grad_d + gd_prior, gb_prior), details
+               "grad_psi": np.asarray(g_psi_F) + g_psi_S + g_psi_prior, "grad_xi": g_xi_S + g_xi_prior,
+               "first_return": fr, "first_return_value": lp_fr}
+    return value, (grad_d + gd_prior + g_fr, gb_prior), details
 
 
 def value(problem: Problem, d, beta, F=None, u0=None, psi=None, keep: dict | None = None, xi=None) -> float:
@@ -287,4 +300,5 @@ def value(problem: Problem, d, beta, F=None, u0=None, psi=None, keep: dict | Non
         keep["S"] = S
     val, _ = F(*_args(S, u0, psi))
     return (float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta))
-            + problem.psi_log_prior(psi)[0] + problem.xi_log_prior(_xi(problem, xi))[0])
+            + problem.psi_log_prior(psi)[0] + problem.xi_log_prior(_xi(problem, xi))[0]
+            + _first_return(problem, d)[0])
