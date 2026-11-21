@@ -8,13 +8,14 @@ with bins averaged over `--k` and every `--every`-th ping of passes A and B, the
 `bbf.inference.loop.infer` as `scripts/infer.py` does for one level: the reflectivity field is fitted
 with the depths held, then Gauss--Newton steps the depths, the field and the sonar parameters
 :math:`\psi` (beam centre and width, linear gain, per side) from their defaults under weak priors.
-It writes :math:`\psi` after every accepted step.
+It writes :math:`\psi` after every accepted step, and the final state next to it (.npz, `bbf.io.save_depths`).
 
 Model choices: `--theta tvg` takes one gain law for both sides and the water column's background
 (`scripts/tvg_theta.py`) and leaves out the near water column; `--shift-b` moves pass B
 horizontally; `--looks` sets the shape of the bin means in place of :math:`kL`; `--g1-sd` is the
 prior standard deviation of the linear gain (small: the gain law is held); `--hold-depths` keeps
-the depths at the start, so that :math:`\psi` and the field alone answer the data.
+the depths at the start, so that :math:`\psi` and the field alone answer the data; `--resume` carries
+:math:`\psi` and the field over from a state this script wrote, e.g. to go on at a finer level.
 
 Only the intensities and the navigation are used; the 3DSS bathymetry is never read.
 """
@@ -35,9 +36,9 @@ from bbf.inference.gauss_newton import gauss_newton
 from bbf.inference.loop import infer, jacobians
 from bbf.inference.multiscale import coarsen_pass, coarsen_theta
 from bbf.inference.objective import beam_jacobian
-from bbf.io import Pass, load_depths, load_patch
+from bbf.io import Pass, load_depths, load_patch, save_depths
 from bbf.match import Reflectivity
-from bbf.ping import Theta, psi_of, u_grid
+from bbf.ping import Theta, psi_of, u_grid, with_psi
 from bbf.ping.first_return import FirstReturn
 
 jax.config.update("jax_enable_x64", True)
@@ -73,6 +74,8 @@ def main():
     ap.add_argument("--beam", type=float, nargs=2, default=None, metavar=("CENTRE", "WIDTH"),
                     help="start and prior mean of the beam, degrees (default: the 3DSS defaults)")
     ap.add_argument("--hold-depths", action="store_true")
+    ap.add_argument("--resume", action="store_true",
+                    help="start psi and the field from START's (a state this script wrote); the prior of psi stays at the defaults")
     args = ap.parse_args()
 
     passes = [every(load_patch(args.patches, n), args.every) for n in "AB"]
@@ -94,6 +97,10 @@ def main():
     first_return = FirstReturn([I.first_echo(p, theta) for p in passes])
     psi_sd = np.array([[np.radians(10.0), np.radians(15.0), args.g1_sd]] * 2)
     psi_prior = (psi_of(theta), psi_sd)
+    xi0 = None
+    if args.resume:
+        theta = with_psi(theta, np.asarray(extra["psi"], float))
+        xi0 = np.asarray(extra["xi"], float)
     cp = [coarsen_pass(p, args.k) for p in passes]
     th = coarsen_theta(theta, args.k, looks=args.looks)
     u = u_grid(cp[0].n_bins, cp[0].dr, du=max(0.005, cp[0].dr / 3))
@@ -117,11 +124,11 @@ def main():
         d_out = d
     else:
         out = infer(cp, mesh, prior, th, d, beta, u, rounds=args.rounds, inner=args.inner, calib_every=20, chunk=32,
-                    psi_prior=psi_prior, refl=refl, first_return=first_return, min_range=min_range, log=log)
+                    psi_prior=psi_prior, refl=refl, xi0=xi0, first_return=first_return, min_range=min_range, log=log)
         for r in out["history"]:
             traj += [h["psi"].tolist() for h in r["gn"] if "psi" in h]
         ell = out["history"][-1]["gn"][-1]["ell"]
-        xi, d_out = out["xi"], out["d"]
+        xi, d_out, beta = out["xi"], out["d"], out["beta"]
     tr = np.array(traj)
     deg = np.degrees(tr[:, :, :2])
     for i in range(len(tr)):
@@ -131,6 +138,7 @@ def main():
            "depth_change_rms": float(np.sqrt(np.mean((d_out - d) ** 2)))}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(res, indent=1))
+    save_depths(args.out.with_suffix(".npz"), mesh, d_out, beta=beta, psi=tr[-1], xi=xi)
     log(f"wrote {args.out}: xi sd {res['xi_sd']:.2f}, depths moved by up to {res['depth_change_max']:.2f} m")
 
 

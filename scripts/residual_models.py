@@ -362,7 +362,7 @@ def make_model(D: Data, spec: dict, field: str, xi_fixed=None):
 
 
 def fit(D: Data, spec: dict, field: str, init: dict | None = None, hold: tuple = (), xi_fixed=None, mask=None,
-        maxiter: int = 1500) -> tuple[dict, np.ndarray, np.ndarray]:
+        maxiter: int = 1500, ftol: float = 2e-8) -> tuple[dict, np.ndarray, np.ndarray]:
     """MAP fit on the training bins; returns (parameters, per-bin log likelihood, per-bin mean). `hold` names parameters kept at `init`."""
     t0 = time.time()
     loglik, nlp = make_model(D, spec, field, xi_fixed)
@@ -382,7 +382,7 @@ def fit(D: Data, spec: dict, field: str, init: dict | None = None, hold: tuple =
         return float(v), np.asarray(g, dtype=float)
 
     res = minimize(fun, np.asarray(x0), jac=True, method="L-BFGS-B", options={"maxiter": maxiter, "maxfun": 2 * maxiter,
-                                                                               "maxcor": 30, "ftol": 2e-8, "gtol": 1e-6})
+                                                                               "maxcor": 30, "ftol": ftol, "gtol": 1e-6})
     log(f"    fit {field}{'' if xi_fixed is None else ' (fields given)'}: {res.nit} iterations, {res.nfev} evaluations, "
         f"-log posterior {res.fun:.0f}, {time.time() - t0:.0f}s")
     p = {**fixed, **unravel(jnp.asarray(res.x))}
@@ -418,13 +418,21 @@ def score(D: Data, name: str, spec: dict, init: dict | None, maxiter: int) -> tu
     """Fit candidate `name` and compute its scores; returns (scores, shared-field parameters)."""
     b = D.b
     t0 = time.time()
+    def with_laws(mask=None):
+        """Joint fit, the laws first with u and the field held: from a fitted (u, field) the few law
+        parameters are badly scaled against the rest, and the joint fit alone stops on its tolerance at once."""
+        start = init
+        if init is not None and any(k not in ("u", "xi", "slope") for k in init_params(D, spec, "shared")):
+            start, _, _ = fit(D, spec, "shared", init=init, hold=("u", "xi", "slope"), mask=mask, maxiter=maxiter // 2, ftol=1e-11)
+        return fit(D, spec, "shared", init=start, mask=mask, maxiter=maxiter, ftol=5e-9)
+
     if "fit_pass" in spec:
         # the laws from one pass alone (its training bins), then kept while u and the field are fitted to both
-        pc, _, _ = fit(D, spec, "shared", init=init, mask=~D.test & (b.pass_id == spec["fit_pass"]), maxiter=maxiter)
+        pc, _, _ = with_laws(~D.test & (b.pass_id == spec["fit_pass"]))
         laws = tuple(k for k in pc if k not in ("u", "xi", "slope"))
         p, ll, mean = fit(D, spec, "shared", init={**(init or {}), **{k: pc[k] for k in laws}}, hold=laws, maxiter=maxiter)
     else:
-        p, ll, mean = fit(D, spec, "shared", init=init, maxiter=maxiter)
+        p, ll, mean = with_laws()
     out = {"model": name, "ll_test": float(ll[D.test].mean()), "ll_train": float(ll[~D.test].mean()),
            "xi_sd": float(p["xi"][D.cover.sum(axis=0) >= 5].std())}
     radiometric = tuple(k for k in p if k not in ("u", "xi", "slope"))
