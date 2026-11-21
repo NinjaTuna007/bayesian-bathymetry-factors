@@ -6,8 +6,11 @@ the depth below the sonar; the later side's puts a seabed point roughly below it
 :math:`(x_t, y_t, z_t - r_0)`. A robust plane through those points gives the trend
 coefficients :math:`\beta_0` (and the plane depths :math:`X \beta_0`), and the GMRF conditional mean
 given the points gives starting depths that follow the relief under the tracks
-(`depths_from_points`).
+(`depths_from_points`). Where a ping's two sides echo at different ranges, the nearer side's
+seabed rises towards the sonar (a bank); `bank_points` adds points for it.
 """
+import warnings
+
 import numpy as np
 import scipy.sparse as sp
 from sksparse.cholmod import cho_factor
@@ -121,6 +124,48 @@ def first_echo_points(ps: Pass, r0: np.ndarray) -> np.ndarray:
     r = np.where(fin.any(axis=1), np.max(np.where(fin, r0, -np.inf), axis=1), np.nan)
     ok = np.isfinite(r)
     return np.column_stack([ps.poses[ok, 0], ps.poses[ok, 1], ps.poses[ok, 2] - r[ok]])
+
+
+def bank_points(ps: Pass, r0: np.ndarray, min_gap: float = 1.0, step: float = 1.0, window: int = 9,
+                top: float | None = None) -> np.ndarray:
+    r"""World seabed points (m, 3) on the side whose first echo is the earlier one, so that a start honours both.
+
+    With :math:`D` the later first echo of a ping (the depth below the sonar, `first_echo_points`)
+    and :math:`r` the earlier one, the nearer side's seabed comes within :math:`r` of the sonar. The
+    simplest surface that does is a plane rising from the point below the sonar at the angle
+    :math:`\gamma` with :math:`\cos\gamma = r / D`, which touches the range :math:`r` at the horizontal distance
+    :math:`r \sin\gamma` outboard. The points lie on that plane every `step` m out to the touching
+    point, for the pings whose echoes differ by more than `min_gap` m. The echoes are first
+    replaced by their running median over `window` pings per side: single detections are off by
+    metres on some pings (a fish, the other channel's leak), and each would raise a bank of its own.
+    Where along the swath the seabed really rises is not in the first echoes; the intensities have
+    to move it from there.
+
+    top: continue the plane beyond the touching point until it is `top` m below the sonar, for a
+    bank that rises to the surface under a sonar near it. Stopped at the touching point, the start
+    falls back to the prior mean behind it: a ridge, whose far side is in shadow where a bank
+    that goes on up is still lit.
+    """
+    r0 = np.asarray(r0, dtype=float)
+    h = window // 2
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # windows without a detection give NaN
+        r0 = np.stack([np.nanmedian(r0[max(t - h, 0):t + h + 1], axis=0) for t in range(len(r0))])
+    pts = []
+    for pose, (rp, rs) in zip(ps.poses, r0):
+        if not (np.isfinite(rp) and np.isfinite(rs)) or abs(rp - rs) <= min_gap:
+            continue
+        D, r, sign = max(rp, rs), min(rp, rs), (1.0 if rs < rp else -1.0)
+        out = sign * np.array([np.cos(pose[5]), -np.sin(pose[5])])  # starboard is :math:`(\cos\psi, -\sin\psi)`
+        cg = r / D
+        sg = np.sqrt(1.0 - cg**2)
+        reach = r * sg
+        if top is not None:
+            reach = max(reach, (D - top) * cg / sg)
+        u = np.arange(step, reach, step)
+        u = np.append(u, reach)
+        pts.append(np.column_stack([pose[0] + u * out[0], pose[1] + u * out[1], pose[2] - D + u * sg / cg]))
+    return np.concatenate(pts) if pts else np.zeros((0, 3))
 
 
 def plane_fit(points: np.ndarray, mesh: M.Mesh, iters: int = 20, k: float = 1.345) -> np.ndarray:

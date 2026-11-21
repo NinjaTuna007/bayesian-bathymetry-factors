@@ -2,14 +2,16 @@
 r"""Bathymetry from side-scan sonar: inference on patches of the prototype's cache.
 
 Usage: python scripts/infer.py PATCHES.npz [--patches-used A B] [--out runs/<name>.npz] [--hold-out N]
-       [--levels K:ROUNDS:STEPS ...] [--temper TAU] [--free-beam] [--no-align]
+       [--levels K:ROUNDS:STEPS ...] [--temper TAU] [--free-beam] [--no-align] [--bank-start [--bank-top M]]
 
 1. The later passes are moved horizontally onto the first's texture (`bbf.match.align_passes`:
    the navigation of passes minutes apart disagrees by metres, more than the reflectivity field's
    range). Mesh over the passes (h = 0.5 m, 10 m buffer); :math:`z_\mathrm{ref}` = median sonar height.
-2. Start: the first echo of each ping-side gives the depth under the track; the prior is a
-   constant mean (their median) plus an :math:`\alpha = 3` Matérn field, and the start depths are
-   its conditional mean given the points. (A planar trend fitted to the first echoes tilts
+2. Start: the later first echo of each ping gives the depth under the track; the prior is a
+   constant mean (the median depth under the tracks) plus an :math:`\alpha = 3` Matérn field, and
+   the start depths are its conditional mean given the points. With `--bank-start`, where the
+   other side echoes earlier its seabed rises to that range (`bbf.inference.init.bank_points`);
+   on passes A and B of the 2026-07-10 bag that start scored 50 000 nats below the level one. (A planar trend fitted to the first echoes tilts
    with the relief under the tracks and extrapolated to depths of :math:`-2` to 40 m.)
    (Planes fitted to the intensities were tried and falsified: passes disagreed by metres, as
    the slopes absorbed errors in the gain and beam pattern.)
@@ -101,6 +103,10 @@ def main():
     ap.add_argument("--levels", nargs="+", default=None, metavar="K:ROUNDS:STEPS",
                     help="bins averaged, rounds and Gauss-Newton steps per level (default 27:1:6 9:1:6 3:2:6)")
     ap.add_argument("--temper", type=float, default=1.0, help="factor on the intensity log likelihood")
+    ap.add_argument("--bank-start", action="store_true",
+                    help="raise a bank in the start where a ping's other side echoes earlier (default: the later echo alone)")
+    ap.add_argument("--bank-top", type=float, default=None, metavar="M",
+                    help="continue each bank of the start up to M metres below the sonar (default: to where it touches the first echo)")
     ap.add_argument("--free-beam", action="store_true", help="fit the beam centre and width per side (default: held)")
     ap.add_argument("--no-align", action="store_true", help="leave the later passes where the navigation has them")
     args = ap.parse_args()
@@ -133,11 +139,14 @@ def main():
 
     # start: first echoes under the tracks, the GMRF conditional mean elsewhere
     pts = np.concatenate([I.first_echo_points(p, r) for p, r in zip(passes, r0)])
+    n_nadir = len(pts)
+    if args.bank_start:  # where the sides echo at different ranges, the nearer side's seabed rises: a bank
+        pts = np.concatenate([pts] + [I.bank_points(p, r, top=args.bank_top) for p, r in zip(passes, r0)])
     first_return = FirstReturn(r0)
     log(f"first echoes found on {np.mean(np.concatenate([np.isfinite(r).ravel() for r in r0])):.1%} of ping-sides")
-    beta = np.array([np.median(mesh.z_ref - pts[:, 2])])
+    beta = np.array([np.median(mesh.z_ref - pts[:n_nadir, 2])])
     d = I.depths_from_points(mesh, pts, prior_of(beta))
-    log(f"first-echo start: {len(pts)} points, trend {np.round(beta, 3)}, "
+    log(f"first-echo start: {n_nadir} points below the tracks and {len(pts) - n_nadir} on banks, trend {np.round(beta, 3)}, "
         f"depth {np.percentile(d, 5):.1f}..{np.percentile(d, 95):.1f} m")
     psi_prior = (psi_of(theta), PSI_SD)
     psi_held = PSI_FREE_BEAM if args.free_beam else np.ones((2, 3), bool)
