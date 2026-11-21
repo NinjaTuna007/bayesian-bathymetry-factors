@@ -14,11 +14,14 @@ Usage: python scripts/infer.py PATCHES.npz [--patches A B] [--out runs/<name>.np
    running the outer loop (refit of the spike parameters and the log-kappa prior,
    Gauss--Newton); Laplace standard deviations at the end. The passes are matched through a
    log-reflectivity field :math:`\xi` shared by all of them (`bbf.match.Reflectivity`), carried
-   between levels. The sonar parameters :math:`\psi` (beam centre and width, linear gain, per
-   side) are unknowns of the graph, with weak priors at the prototype's values. The transmit
-   power enters each ping's log-kappa prior as a known offset. The first echoes, detected once at
-   full resolution, enter as the first-return factor (`bbf.ping.first_return`), which ties the
-   seabed under the tracks to the measured range.
+   between levels. The gain is one fixed law for both sides and the background follows the range
+   and the transmit power as the water column does (`scripts/tvg_theta.py`); blocks nearer than
+   `MIN_RANGE` are left out. The lit/dark labels are relative to that gain and background, so the
+   scored bins do not depend on the sonar parameters :math:`\psi`, of which the beam centre and
+   width per side are unknowns of the graph with weak priors and the linear gain is held. The
+   transmit power enters each ping's log-kappa prior as a known offset. The first echoes, detected
+   once at full resolution, enter as the first-return factor (`bbf.ping.first_return`), which ties
+   the seabed under the tracks to the measured range.
 
 Uses only the intensities and the navigation; the 3DSS bathymetry is never read.
 """
@@ -30,7 +33,8 @@ from pathlib import Path
 import jax
 import matplotlib.pyplot as plt
 import numpy as np
-from prototype_theta import EPS, GAIN_DB, L_SHAPE, NOISE
+import tvg_theta as TVG
+from prototype_theta import EPS, L_SHAPE
 
 from bbf import prior as PR
 from bbf.inference import init as I
@@ -50,6 +54,7 @@ SIGMA_BETA = np.array([[100.0]])  # the constant mean: sd 10 m about the median 
 LEVELS = [(27, 1, 6), (9, 1, 6), (3, 2, 6)]  # (bins averaged, rounds, Gauss-Newton steps)
 RHO_XI, SIGMA_XI = 2.0, 1.0  # range (m) and sd of the log-reflectivity field
 PSI_SD = np.array([[np.radians(10.0), np.radians(15.0), 0.5]] * 2)  # beam centre, width (rad), gain (dB/m)
+PSI_HELD = np.array([[False, False, True]] * 2)  # the linear gain is part of the fixed gain law
 
 
 def log(msg):
@@ -65,8 +70,9 @@ def main():
     t_start = time.time()
 
     passes = [load_patch(args.patches, n) for n in args.names]
-    theta = Theta(noise=NOISE, L=L_SHAPE, eps=EPS, eta=10 * NOISE, zeta=100 * NOISE, ell=2.0, log_kappa_mean=36.0,
-                  log_kappa_std=2.0, gain_db=GAIN_DB)
+    theta = Theta(noise=TVG.NOISE, L=L_SHAPE, eps=EPS, eta=10 * TVG.NOISE, zeta=100 * TVG.NOISE, ell=2.0,
+                  log_kappa_mean=TVG.LOG_KAPPA_MEAN, log_kappa_std=2.0, gain_db=TVG.GAIN_DB,
+                  noise_slope=TVG.NOISE_SLOPE, noise_power=TVG.NOISE_POWER)
     mesh = I.mesh_for_passes(passes, h=H_MESH, buffer=BUFFER)
     log(f"{sum(p.n_pings for p in passes)} pings in {len(passes)} passes; mesh {mesh.n_vertices} vertices, "
         f"z_ref {mesh.z_ref:.2f}")
@@ -99,8 +105,8 @@ def main():
         if li == len(LEVELS) - 1:
             extra["laplace_samples"] = 100
         out = infer(cp, mesh, prior_of(beta), th, d, beta, u, rounds=rounds, inner=inner, calib_every=50,
-                    chunk=32, psi_prior=psi_prior, refl=refl, xi0=xi,
-                    first_return=first_return, log=log, **extra)
+                    chunk=32, psi_prior=psi_prior, psi_held=PSI_HELD, refl=refl, xi0=xi,
+                    first_return=first_return, min_range=TVG.MIN_RANGE, log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]
         theta = dataclasses.replace(theta, eta=np.asarray(to.eta) * k, zeta=np.asarray(to.zeta) * k, ell=to.ell,
@@ -109,7 +115,7 @@ def main():
         psi = out["psi"]
         save_depths(args.out.with_name(f"{args.out.stem}_k{k}.npz"), mesh, d, beta=beta, psi=psi, xi=xi)
         log(f"level k = {k} done: trend {np.round(beta, 3)}; beam centre {np.degrees(psi[:, 0]).round(1)}, "
-            f"width {np.degrees(psi[:, 1]).round(1)} deg, g1 {psi[:, 2].round(3)} dB/m")
+            f"width {np.degrees(psi[:, 1]).round(1)} deg")
 
     assert out is not None
     save_depths(args.out, mesh, d, beta=beta, sd_d=out["sd_d"], sd_beta=out["sd_beta"], psi=out["psi"], xi=xi,

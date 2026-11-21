@@ -82,7 +82,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           inner: int = 10, calib_every: int = 50, chunk: int = 32, seed: int = 0,
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
           refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None, callback=None,
-          min_range: float = 0.0, fit_shape: bool = False, log=print) -> dict:
+          min_range: float = 0.0, fit_shape: bool = False, psi_held=None, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -95,7 +95,10 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
 
     psi_prior: (mean, sd), each (2, 3), of the sonar parameters :math:`\psi` (beam centre and width
     in radians, linear gain in dB/m, per side); with it, :math:`\psi` is an unknown of the graph,
-    started at theta's values. Otherwise it stays at theta's.
+    started at theta's values. Otherwise it stays at theta's. psi_held: (2, 3) bool, the components
+    of a free :math:`\psi` that stay at theta's all the same. The labels and the background are
+    relative to the gain, so with the linear gain (the last column) held the scored bins do not
+    depend on :math:`\psi`.
 
     With `laplace_samples` > 0, also the Laplace posterior standard deviations of the depths
     (`sd_d`), trend (`sd_beta`) and field (`sd_xi`) at the final mode, from that many Monte Carlo samples.
@@ -149,7 +152,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         log(f"round {rnd}: theta fit (converged {fit['converged']}): eta {np.asarray(theta.eta)}, "
             f"zeta {np.asarray(theta.zeta)}, ell {np.asarray(theta.ell)}, "
             f"log kappa {np.asarray(theta.log_kappa_mean)} ± {np.asarray(theta.log_kappa_std)}")
-        problem = dataclasses.replace(base, theta=theta, psi_prior=psi_prior)
+        problem = dataclasses.replace(base, theta=theta, psi_prior=psi_prior, psi_held=psi_held)
         if rnd == 0 and refl is not None and xi0 is None:
             fixed = dataclasses.replace(problem, psi_prior=None)
             _, _, _, xi, _ = gauss_newton(fixed, d, beta, jacobians(fixed, d, xi), xi=xi, hold_depths=True,

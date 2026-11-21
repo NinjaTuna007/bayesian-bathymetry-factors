@@ -21,7 +21,9 @@ reverse pass. Without it :math:`\xi = 0`.
 The sonar parameters :math:`\psi` (beam centre and width, linear gain; `bbf.ping.theta.psi_of`)
 are an argument too: the beam reaches :math:`F` through :math:`S`, the gain directly. With
 `Problem.psi_prior` set they are unknowns of the graph with a Gaussian prior, and the gradient
-includes them; otherwise they stay at the values in `Problem.theta`.
+includes them; otherwise they stay at the values in `Problem.theta`. `Problem.psi_held` keeps
+some of them fixed while the others are fitted, e.g. the gain with the beam free: the labels and
+the background are relative to the gain, so a fitted gain chooses which bins are scored.
 """
 from dataclasses import dataclass
 from functools import cache, cached_property, lru_cache
@@ -58,6 +60,7 @@ class Problem:
     chunk: int = 32
     valid: list[np.ndarray] | None = None  # per pass (n, 2, n_blocks): blocks to use (see onset_valid)
     psi_prior: tuple[np.ndarray, np.ndarray] | None = None  # (mean, sd) of psi (2, 3); None: psi fixed
+    psi_held: np.ndarray | None = None  # (2, 3) bool: components of a free psi kept at their start; None: none
     refl: Reflectivity | None = None  # prior of the log-reflectivity field xi; None: no field
     kappa_offset: list[np.ndarray] | None = None  # per pass (n,): known shift of the log-kappa prior mean (log power)
     first_return: FirstReturn | None = None  # first echoes per ping-side; None: no first-return factor

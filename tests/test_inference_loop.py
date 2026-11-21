@@ -123,6 +123,42 @@ def test_inference_with_free_sonar_parameters():
 
 
 @pytest.mark.slow
+def test_inference_holds_the_gain_with_the_beam_free():
+    """With the linear gain held, the beam is fitted, the gain stays, and the labels are those of the start."""
+    import dataclasses
+
+    from bbf.inference.loop import labels_of
+    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = np.asarray(DEPTH - 3.0 * np.exp(-((v[:, 0] - 3) ** 2 + v[:, 1] ** 2) / (2 * 4.0**2)))
+    th = P.Theta(noise=1e-7, L=0.6, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5,
+                 gain_db=[[0.0, 0.05, 0.0]] * 2)
+    u = P.u_grid(N_BINS, DR, du=0.05)
+    rng = np.random.default_rng(1)
+    passes = []
+    for x0 in (-6.0, 6.0):
+        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, SONAR_Z), np.zeros((9, 3))])
+        passes.append(simulate_pass(m, jnp.asarray(d_true), poses, th, u, rng, f"x{x0}"))
+    wrong = dataclasses.replace(th, beta0=np.radians([56.0, 44.0]))
+    psi0 = P.psi_of(wrong)
+    sd = np.array([[np.radians(15), np.radians(20), 0.2]] * 2)
+    held = np.array([[False, False, True]] * 2)
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=np.array([0.0, 0.0, DEPTH]), Sigma_beta=np.diag([0.01, 0.01, 4.0]))
+    out = infer(passes, m, prior, wrong, jnp.asarray(d_true), np.array([0.0, 0.0, DEPTH]), u, rounds=2, inner=4,
+                calib_every=3, chunk=4, psi_prior=(psi0, sd), psi_held=held, laplace_samples=20, log=lambda s: None)
+    for r in out["history"]:
+        assert np.all(np.diff([h["ell"] for h in r["gn"]]) > 0)
+    np.testing.assert_array_equal(out["psi"][:, 2], psi0[:, 2])
+    assert np.all(np.abs(out["psi"][:, :2] - psi0[:, :2]) > 1e-4)
+    # the beam went towards the true centre on both sides
+    assert np.all(np.abs(out["psi"][:, 0] - P.psi_of(th)[:, 0]) < np.abs(psi0[:, 0] - P.psi_of(th)[:, 0]))
+    for ps, lab in zip(passes, out["problem"].labels):
+        np.testing.assert_array_equal(lab, labels_of(ps, wrong))
+    np.testing.assert_array_equal(out["sd_psi"][:, 2], 0.0)
+    assert np.all(out["sd_psi"][:, :2] > 0)
+
+
+@pytest.mark.slow
 def test_inference_with_reflectivity_field():
     """The outer loop with the shared field: fitted at the start depths, then stepped with them; every step ascends."""
     from bbf import match as Mt

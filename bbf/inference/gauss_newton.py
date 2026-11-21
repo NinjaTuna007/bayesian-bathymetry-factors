@@ -6,7 +6,8 @@ Each step solves :math:`(H + \lambda\,\mathrm{diag}\,H)\,\delta = g` with the au
 on the exact objective guards the piecewise-smooth rendering; :math:`\lambda` shrinks after an
 accepted step and grows after a rejected one (Levenberg--Marquardt). The Jacobians are frozen
 for the whole loop; the weights are recomputed every step. With :math:`\psi` free
-(`Problem.psi_prior`) it is stepped too, with the beam derivatives of :math:`S` frozen like :math:`J`.
+(`Problem.psi_prior`) it is stepped too, with the beam derivatives of :math:`S` frozen like :math:`J`;
+its components in `Problem.psi_held` stay where they are.
 The log-reflectivity field :math:`\xi` (`Problem.refl`) is stepped with the depths, in the same solve.
 
 Each step in :math:`\xi` is limited to `XI_MAX_STEP` per vertex. A bin far brighter than predicted,
@@ -64,6 +65,8 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     move = np.ones(lay["size"], bool)  # the variables this loop steps
     if hold_depths:
         move[:n] = move[ib:ib + nb] = False
+    if free and problem.psi_held is not None:
+        move[ip:ip + 6] = ~np.asarray(problem.psi_held, bool).ravel()  # e.g. the gain, held at theta's
     ell, (gd, gb), det = value_and_grad(problem, d, beta, F, psi=psi, xi=xi)
     if not np.isfinite(ell):
         raise FloatingPointError(f"log posterior is {ell} at the start")
@@ -89,7 +92,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             # it; its prior keeps the system definite
             damp[ip:] = 0.0
             Hd = sp.csc_matrix(H + sp.diags(damp))
-            if hold_depths:
+            if not move.all():
                 Hd = sp.csc_matrix(sp.csr_matrix(Hd[:, move])[move])
             try:
                 delta = np.zeros(lay["size"])
