@@ -127,6 +127,7 @@ MODELS = {
     # for tables written with --theta tvg: the prototype's laws on the same bins, and the candidates on the shared gain
     "proto": {"proto": True},
     "proto@psi": {"proto": "file"},
+    "proto+noise": {"proto": True, "noise": True},
     "proto+range-pow+beam-gauss": {"proto": True, "range": "pow", "beam": "gauss"},
     "beam-gauss+noise": {"beam": "gauss", "noise": True},
     "beam-gauss+ang-pow": {"beam": "gauss", "ang": "pow"},
@@ -461,7 +462,8 @@ def score(D: Data, name: str, spec: dict, init: dict | None, maxiter: int) -> tu
             m = D.test & (b.pass_id == pi) & (b.side == ci)
             out[f"ll_test_{pn}_{cn}"] = float(ll[m].mean())
     out["time"] = time.time() - t0
-    out["params"] = {k: np.round(np.asarray(v), 4).tolist() for k, v in p.items() if k in radiometric and np.size(v) <= 12}
+    out["params"] = {k: np.round(np.asarray(v), 4).tolist() for k, v in p.items() if k in radiometric and np.size(v) <= 80}
+    out["knots"] = {k: np.asarray(D.knots[k]).tolist() for k in ("range", "beam", "ang") if spec.get(k) == "spline"}
     log(f"{name}: held-out ll/bin {out['ll_test']:+.4f} (no field {out['ll_test_none']:+.4f}, per pass {out['ll_test_pass']:+.4f}); "
         f"xi sd {out['xi_sd']:.2f}; d-xi sd {out['dxi_sd']:.2f}; transfer A {out['transfer_A']:+.2f} B {out['transfer_B']:+.2f}; "
         f"cell e IQR {out['cell_e_iqr_nofield']:.2f} / {out['cell_e_iqr_shared']:.2f}; {out['time']:.0f}s")
@@ -579,8 +581,9 @@ def main():
         print(f"{r['model']:38s} {r['ll_test'] - ref['ll_test']:+8.4f} {r['ll_test_none'] - ref['ll_test_none']:+11.4f} {r['xi_sd']:6.2f} "
               f"{r['dxi_sd']:7.2f} {r['transfer_A']:+8.2f} {r['transfer_B']:+8.2f} {r['cell_e_iqr_nofield']:8.2f} {r['cell_e_iqr_shared']:8.2f}")
     for r in results:
-        if r["params"]:
-            print(f"  {r['model']}: {r['params']}")
+        short = {k: v for k, v in r["params"].items() if np.size(v) <= 12}
+        if short:
+            print(f"  {r['model']}: {short}")
 
     # the passes' disagreement without a field: laws of the viewing geometry, noise, and the rest
     first, last = args.models[0], max(args.models, key=lambda n: fits[n]["_mean0"].size and

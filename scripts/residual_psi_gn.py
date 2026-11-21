@@ -12,7 +12,7 @@ It writes :math:`\psi` after every accepted step, and the final state next to it
 
 Model choices: `--theta tvg` takes one gain law for both sides and the water column's background
 (`scripts/tvg_theta.py`) and leaves out the near water column; `--shift-b` moves pass B
-horizontally; `--looks` sets the shape of the bin means in place of :math:`kL`; `--g1-sd` is the
+horizontally; `--beam-response` adds a fitted response across the swath to the Gaussian beam; `--looks` sets the shape of the bin means in place of :math:`kL`; `--g1-sd` is the
 prior standard deviation of the linear gain (small: the gain law is held); `--hold-depths` keeps
 the depths at the start, so that :math:`\psi` and the field alone answer the data; `--resume` carries
 :math:`\psi` and the field over from a state this script wrote, e.g. to go on at a finer level.
@@ -74,6 +74,9 @@ def main():
     ap.add_argument("--beam", type=float, nargs=2, default=None, metavar=("CENTRE", "WIDTH"),
                     help="start and prior mean of the beam, degrees (default: the 3DSS defaults)")
     ap.add_argument("--hold-depths", action="store_true")
+    ap.add_argument("--beam-response", nargs=2, default=None, metavar=("SCORES.json", "MODEL"),
+                    help="a free beam response on top of the Gaussian (`Theta.beam_knots`): the piecewise-linear law a "
+                         "candidate of scripts/residual_models.py fitted, e.g. beam-spline")
     ap.add_argument("--resume", action="store_true",
                     help="start psi and the field from START's (a state this script wrote); the prior of psi stays at the defaults")
     args = ap.parse_args()
@@ -91,6 +94,9 @@ def main():
         min_range = TVG.MIN_RANGE
     if args.beam is not None:
         theta = dataclasses.replace(theta, beta0=np.radians(args.beam[0]), omega=np.radians(args.beam[1]))
+    if args.beam_response is not None:
+        fitted = next(r for r in json.loads(Path(args.beam_response[0]).read_text()) if r["model"] == args.beam_response[1])
+        theta = dataclasses.replace(theta, beam_knots=fitted["knots"]["beam"], beam_log=fitted["params"]["beam"])
     mesh, d, extra = load_depths(args.start)
     beta = np.asarray(extra["beta"], float)
     prior = PR.Prior(mesh, RHO, SIGMA, mu_beta=beta, Sigma_beta=np.array([[100.0]]), alpha=ALPHA)
