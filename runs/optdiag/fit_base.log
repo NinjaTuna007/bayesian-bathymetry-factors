@@ -1,0 +1,26 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[11:59:12] fit base: k=27 start every=1 {}
+[11:59:47]   untempered data -10972339, first return -7458, prior d -192, prior xi -20841; d - d0: sd 0.00 max 0.00 m
+[11:59:47]     first-return residual A port: median -0.09 m, |res| < 0.3 m on 36%
+[11:59:47]     first-return residual A stbd: median -2.32 m, |res| < 0.3 m on 4%
+[11:59:47]     first-return residual B port: median -0.03 m, |res| < 0.3 m on 87%
+[11:59:47]     first-return residual B stbd: median -0.07 m, |res| < 0.3 m on 91%
+[12:00:26]   GN start: ell = -11000828.1
+[12:01:36]   GN 0: ell -10978079.7 actual +22748.4 pred +57888.1 (rho 0.39; raw-step pred +454769.3) lam 1.0e-03 psi-shorten 6.7 scale 1.0 raw max|dd| 540.9 m, 8773 raw > cap, 1388 clipped; beam [49.3 50.3]/[55.  60.6] g1 [0.64  0.036] xi sd 1.34 fr -7192; same point from cold modes +2177 71s
+[12:03:05]   GN 1: ell -10948034.1 actual +30045.6 pred +15966.9 (rho 1.88; raw-step pred +928832.7) lam 3.3e-04 psi-shorten 96.1 scale 1.0 raw max|dd| 348.7 m, 22226 raw > cap, 127 clipped; beam [50.9 52.5]/[50.  60.3] g1 [0.637 0.038] xi sd 1.33 fr -7183; same point from cold modes -22840 89s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:98: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=1.18e-11).
+  Hpp = np.asarray(H[ip:ip + 6][:, ip:ip + 6].todense())
+[12:04:05]   GN 2: ell -10946016.7 actual +2017.4 pred +14239.1 (rho 0.14; raw-step pred +1853585.5) lam 1.1e-04 psi-shorten 224.7 scale 1.0 raw max|dd| 415.5 m, 33735 raw > cap, 82 clipped; beam [51.8 54.2]/[45. 57.] g1 [0.64  0.038] xi sd 1.33 fr -7177; same point from cold modes -6459 60s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:98: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=2.08e-11).
+  Hpp = np.asarray(H[ip:ip + 6][:, ip:ip + 6].todense())
+[12:04:59]   GN 3: ell -10911698.2 actual +34318.5 pred +17888.8 (rho 1.92; raw-step pred +3952957.2) lam 3.7e-05 psi-shorten 421.8 scale 1.0 raw max|dd| 681.8 m, 44978 raw > cap, 92 clipped; beam [52.6 55.9]/[40.  53.6] g1 [0.642 0.038] xi sd 1.33 fr -7169; same point from cold modes -17187 54s
+/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/scripts/optdiag/gn.py:98: CholmodWarning: Matrix is nearly singular.  Results may be inaccurate (rcond=3.44e-12).
+  Hpp = np.asarray(H[ip:ip + 6][:, ip:ip + 6].todense())
+[12:05:52]   GN 4: ell -10898475.9 actual +13222.3 pred +24362.6 (rho 0.54; raw-step pred +8411947.1) lam 1.2e-05 psi-shorten 665.0 scale 1.0 raw max|dd| 318.8 m, 110720 raw > cap, 0 clipped; beam [53.5 57.5]/[35.  50.6] g1 [0.644 0.038] xi sd 1.33 fr -7161; same point from cold modes -4719 53s
+[12:06:44]   GN 5: ell -10866981.8 actual +31494.1 pred +34276.1 (rho 0.92; raw-step pred +20833332.8) lam 4.1e-06 psi-shorten 1091.9 scale 1.0 raw max|dd| 236.7 m, 114653 raw > cap, 0 clipped; beam [54.4 59. ]/[30.  48.7] g1 [0.645 0.038] xi sd 1.33 fr -7157; same point from cold modes -7361 52s
+[12:07:08]   untempered data -10849119, first return -7157, prior d -337, prior xi -17730; d - d0: sd 0.21 max 3.67 m
+[12:07:08]     first-return residual A port: median +0.01 m, |res| < 0.3 m on 36%
+[12:07:08]     first-return residual A stbd: median -2.30 m, |res| < 0.3 m on 7%
+[12:07:08]     first-return residual B port: median +0.01 m, |res| < 0.3 m on 85%
+[12:07:08]     first-return residual B stbd: median -0.03 m, |res| < 0.3 m on 92%
+[12:07:08] saved

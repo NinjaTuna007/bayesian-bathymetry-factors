@@ -1,0 +1,20 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[13:55:31] fit t02trfr: k=27 start every=1 {'psi': 'fixed', 'grid': '49', 'shadow_stop': '0', 'ratio': '1', 'floor': '0.5', 'clip': 'trust', 'relin': '1', 'temper': '0.02', 'fr_sigma': '1.0'}
+[13:56:07]   untempered data -10869247, first return -7458, prior d -192, prior xi -1914; d - d0: sd 0.00 max 0.00 m
+[13:56:07]     first-return residual A port: median -0.09 m, |res| < 0.3 m on 36%
+[13:56:07]     first-return residual A stbd: median -2.32 m, |res| < 0.3 m on 4%
+[13:56:07]     first-return residual B port: median -0.03 m, |res| < 0.3 m on 87%
+[13:56:07]     first-return residual B stbd: median -0.07 m, |res| < 0.3 m on 91%
+[13:56:47]   GN start: ell = -231546.6
+[13:59:04]   GN 0: ell -230890.5 actual +656.1 pred +4560.6 (rho 0.14; raw-step pred +4560.6) lam 1.0e+00 psi-shorten 1.0 scale 1.0 raw max|dd| 0.8 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 0.68 fr -8180; same point from cold modes +0 137s
+[13:59:43]   GN 1: ell -230537.8 actual +352.7 pred +1543.7 (rho 0.23; raw-step pred +1543.7) lam 4.1e+00 psi-shorten 1.0 scale 1.0 raw max|dd| 0.2 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 0.68 fr -8083; same point from cold modes -0 39s
+[14:00:23]   GN 2: ell -230364.3 actual +173.6 pred +498.7 (rho 0.35; raw-step pred +498.7) lam 1.6e+01 psi-shorten 1.0 scale 1.0 raw max|dd| 0.1 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 0.68 fr -8058; same point from cold modes -0 39s
+[14:01:02]   GN 3: ell -230248.0 actual +116.3 pred +509.5 (rho 0.23; raw-step pred +509.5) lam 1.6e+01 psi-shorten 1.0 scale 1.0 raw max|dd| 0.1 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 0.68 fr -8035; same point from cold modes -0 40s
+[14:02:33]   GN 4: ell -230162.4 actual +85.6 pred +149.3 (rho 0.57; raw-step pred +149.3) lam 6.6e+01 psi-shorten 1.0 scale 1.0 raw max|dd| 0.0 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 0.68 fr -8029; same point from cold modes -0 91s
+[14:03:41]   GN 5: ell -230103.4 actual +59.0 pred +129.5 (rho 0.46; raw-step pred +129.5) lam 6.6e+01 psi-shorten 1.0 scale 1.0 raw max|dd| 0.0 m, 0 raw > cap, 0 clipped; beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] xi sd 0.68 fr -8023; same point from cold modes +0 68s
+[14:04:06]   untempered data -10841292, first return -6988, prior d -296, prior xi -1724; d - d0: sd 0.04 max 0.91 m
+[14:04:06]     first-return residual A port: median +0.06 m, |res| < 0.3 m on 40%
+[14:04:06]     first-return residual A stbd: median -1.93 m, |res| < 0.3 m on 5%
+[14:04:06]     first-return residual B port: median -0.01 m, |res| < 0.3 m on 89%
+[14:04:06]     first-return residual B stbd: median -0.03 m, |res| < 0.3 m on 91%
+[14:04:06] saved
