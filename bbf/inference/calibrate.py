@@ -12,7 +12,8 @@ With `fit_shape` the gamma shape :math:`L` (one for both sides) and the spike ra
 `bbf.inference.multiscale` scales them as for independent bins, :math:`kL` and
 :math:`1 - (1 - \epsilon)^k`, which neighbouring bins are not: on the real data the means of 27
 bins get the shape 13 and a spike rate of 0.8 on port, so that most of the likelihood sits in
-the wide spike component.
+the wide spike component. The outer loop fits them once per level, after the reflectivity
+field's first fit (`bbf.inference.loop.infer`).
 """
 import dataclasses
 

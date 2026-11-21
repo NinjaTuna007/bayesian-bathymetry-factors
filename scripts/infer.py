@@ -14,7 +14,9 @@ Usage: python scripts/infer.py PATCHES.npz [--patches A B] [--out runs/<name>.np
    running the outer loop (refit of the spike parameters and the log-kappa prior,
    Gauss--Newton); Laplace standard deviations at the end. The passes are matched through a
    log-reflectivity field :math:`\xi` shared by all of them (`bbf.match.Reflectivity`), carried
-   between levels. The gain is one fixed law for both sides and the background follows the range
+   between levels. The gamma shape and the spike rates are fitted per level, after the field's
+   first fit (neighbouring bins are correlated, so the means of k bins do not have the shape
+   :math:`kL`), and start each level from the level before. The gain is one fixed law for both sides and the background follows the range
    and the transmit power as the water column does (`scripts/tvg_theta.py`); blocks nearer than
    `MIN_RANGE` are left out. The lit/dark labels are relative to that gain and background, so the
    scored bins do not depend on the sonar parameters :math:`\psi`, of which the beam centre and
@@ -94,11 +96,13 @@ def main():
     save_depths(args.out.with_name(args.out.stem + "_start.npz"), mesh, d, beta=beta)
 
     # coarse to fine
-    out, xi = None, None
+    out, xi, shape, eps = None, None, None, None
     refl = Reflectivity(mesh, RHO_XI, SIGMA_XI)
     for li, (k, rounds, inner) in enumerate(LEVELS):
         cp = [coarsen_pass(p, k) for p in passes]
-        th = coarsen_theta(theta, k)
+        th = coarsen_theta(theta, k, looks=shape)  # the first level starts from independent bins
+        if eps is not None:
+            th = dataclasses.replace(th, eps=eps)
         u = u_grid(cp[0].n_bins, cp[0].dr, du=max(0.005, cp[0].dr / 3))
         log(f"level k = {k}: {cp[0].n_bins} bins of {cp[0].dr * 100:.1f} cm, {len(u)} samples per side")
         extra = {}
@@ -106,16 +110,17 @@ def main():
             extra["laplace_samples"] = 100
         out = infer(cp, mesh, prior_of(beta), th, d, beta, u, rounds=rounds, inner=inner, calib_every=50,
                     chunk=32, psi_prior=psi_prior, psi_held=PSI_HELD, refl=refl, xi0=xi,
-                    first_return=first_return, min_range=TVG.MIN_RANGE, log=log, **extra)
+                    first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=True, log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]
         theta = dataclasses.replace(theta, eta=np.asarray(to.eta) * k, zeta=np.asarray(to.zeta) * k, ell=to.ell,
                                     log_kappa_mean=to.log_kappa_mean, log_kappa_std=to.log_kappa_std,
                                     beta0=to.beta0, omega=to.omega, gain_db=to.gain_db)
+        shape, eps = to.L, np.asarray(to.eps)
         psi = out["psi"]
         save_depths(args.out.with_name(f"{args.out.stem}_k{k}.npz"), mesh, d, beta=beta, psi=psi, xi=xi)
         log(f"level k = {k} done: trend {np.round(beta, 3)}; beam centre {np.degrees(psi[:, 0]).round(1)}, "
-            f"width {np.degrees(psi[:, 1]).round(1)} deg")
+            f"width {np.degrees(psi[:, 1]).round(1)} deg; shape {shape:.2f}, spike rates {eps.round(3)}")
 
     assert out is not None
     save_depths(args.out, mesh, d, beta=beta, sd_d=out["sd_d"], sd_beta=out["sd_beta"], psi=out["psi"], xi=xi,
