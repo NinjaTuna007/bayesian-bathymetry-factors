@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 r"""Bathymetry from side-scan sonar: inference on patches of the prototype's cache.
 
-Usage: python scripts/infer.py PATCHES.npz [--patches A B] [--out runs/<name>.npz]
+Usage: python scripts/infer.py PATCHES.npz [--patches-used A B] [--out runs/<name>.npz] [--hold-out N]
+       [--levels K:ROUNDS:STEPS ...] [--temper TAU] [--free-beam] [--no-align]
 
 1. The later passes are moved horizontally onto the first's texture (`bbf.match.align_passes`:
    the navigation of passes minutes apart disagrees by metres, more than the reflectivity field's
@@ -31,6 +32,10 @@ Usage: python scripts/infer.py PATCHES.npz [--patches A B] [--out runs/<name>.np
    grid of starts and the shadow factor is differentiated through it, so the value does not
    depend on the last evaluation and the gradient is the value's.
 
+Every saved state holds the level's sonar parameters (`scripts/theta_io.py`), the moves given to
+the passes and the Gauss--Newton history (gain, predicted gain and their ratio per step), for
+`scripts/compare_runs.py`. `--hold-out N` leaves every N-th ping out of the fit, to score.
+
 Uses only the intensities and the navigation; the 3DSS bathymetry is never read.
 """
 import argparse
@@ -43,6 +48,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tvg_theta as TVG
 from prototype_theta import EPS, L_SHAPE
+from theta_io import theta_arrays
 
 from bbf import prior as PR
 from bbf.inference import init as I
@@ -62,6 +68,7 @@ SIGMA_BETA = np.array([[100.0]])  # the constant mean: sd 10 m about the median 
 LEVELS = [(27, 1, 6), (9, 1, 6), (3, 2, 6)]  # (bins averaged, rounds, Gauss-Newton steps)
 RHO_XI, SIGMA_XI = 2.0, 1.0  # range (m) and sd of the log-reflectivity field
 PSI_SD = np.array([[np.radians(10.0), np.radians(15.0), 0.5]] * 2)  # beam centre, width (rad), gain (dB/m)
+FIELD_STEPS = 18  # Gauss-Newton steps of the field's first fit, at the start depths
 MODE_GRID = 49  # starts of each log-kappa mode search
 PSI_FREE_BEAM = np.array([[False, False, True]] * 2)  # held with --free-beam: the linear gain, part of the gain law
 
@@ -70,17 +77,38 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def kept(ps, hold_out: int):
+    """The pass without every `hold_out`-th ping (from its ping hold_out // 2); all of it for 0."""
+    if hold_out <= 0:
+        return ps
+    keep = np.arange(ps.n_pings) % hold_out != hold_out // 2
+    return dataclasses.replace(ps, poses=ps.poses[keep], y=ps.y[keep], t=ps.t[keep],
+                               power=None if ps.power is None else ps.power[keep])
+
+
+def gn_history(out) -> dict:
+    """Per accepted Gauss--Newton step of a level (rounds concatenated): value, gain, predicted gain, ratio, time."""
+    steps = [h for r in out["history"] for h in r["gn"] if "rho" in h]
+    return {f"gn_{k}": np.array([h[k] for h in steps]) for k in ("ell", "gain", "pred", "rho", "step", "time", "lam")}
+
+
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     ap.add_argument("patches", type=Path)
     ap.add_argument("--patches-used", nargs="+", default=["A", "B"], dest="names")
     ap.add_argument("--out", type=Path, default=Path("runs/inference.npz"))
+    ap.add_argument("--hold-out", type=int, default=0, help="leave every N-th ping out of the fit (0: none)")
+    ap.add_argument("--levels", nargs="+", default=None, metavar="K:ROUNDS:STEPS",
+                    help="bins averaged, rounds and Gauss-Newton steps per level (default 27:1:6 9:1:6 3:2:6)")
+    ap.add_argument("--temper", type=float, default=1.0, help="factor on the intensity log likelihood")
     ap.add_argument("--free-beam", action="store_true", help="fit the beam centre and width per side (default: held)")
     ap.add_argument("--no-align", action="store_true", help="leave the later passes where the navigation has them")
     args = ap.parse_args()
     t_start = time.time()
 
-    passes = [load_patch(args.patches, n) for n in args.names]
+    levels = LEVELS if args.levels is None else [tuple(int(v) for v in lv.split(":")) for lv in args.levels]
+    passes = [kept(load_patch(args.patches, n), args.hold_out) for n in args.names]
+    raw, moves = list(passes), np.zeros((len(passes), 2))
     theta = Theta(noise=TVG.NOISE, L=L_SHAPE, eps=EPS, eta=10 * TVG.NOISE, zeta=100 * TVG.NOISE, ell=2.0,
                   log_kappa_mean=TVG.LOG_KAPPA_MEAN, log_kappa_std=2.0, gain_db=TVG.GAIN_DB,
                   noise_slope=TVG.NOISE_SLOPE, noise_power=TVG.NOISE_POWER)
@@ -95,6 +123,7 @@ def main():
             else:
                 log(f"pass {p.name}: texture peak {off.corr:+.2f} ({off.z:.1f} sd; {off.corr_zero:+.2f} unmoved) at "
                     f"({off.move[0]:+.2f}, {off.move[1]:+.2f}) m east, north: {'moved' if off.z >= 5.0 else 'left'}")
+        moves = np.array([p.poses[0, :2] - q.poses[0, :2] for p, q in zip(passes, raw)])
     mesh = I.mesh_for_passes(passes, h=H_MESH, buffer=BUFFER)
     log(f"{sum(p.n_pings for p in passes)} pings in {len(passes)} passes; mesh {mesh.n_vertices} vertices, "
         f"z_ref {mesh.z_ref:.2f}")
@@ -118,7 +147,8 @@ def main():
     # coarse to fine
     out, xi, shape, eps = None, None, None, None
     refl = Reflectivity(mesh, RHO_XI, SIGMA_XI)
-    for li, (k, rounds, inner) in enumerate(LEVELS):
+    state = {"moves": moves, "hold_out": args.hold_out}
+    for li, (k, rounds, inner) in enumerate(levels):
         cp = [coarsen_pass(p, k) for p in passes]
         th = coarsen_theta(theta, k, looks=shape)  # the first level starts from independent bins
         if eps is not None:
@@ -126,11 +156,12 @@ def main():
         u = u_grid(cp[0].n_bins, cp[0].dr, du=max(0.005, cp[0].dr / 3))
         log(f"level k = {k}: {cp[0].n_bins} bins of {cp[0].dr * 100:.1f} cm, {len(u)} samples per side")
         extra = {}
-        if li == len(LEVELS) - 1:
+        if li == len(levels) - 1:
             extra["laplace_samples"] = 100
         out = infer(cp, mesh, prior_of(beta), th, d, beta, u, rounds=rounds, inner=inner, calib_every=50,
                     chunk=32, psi_prior=psi_prior, psi_held=psi_held, refl=refl, xi0=xi,
-                    first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=True, mode_grid=MODE_GRID, shadow_stop=False, log=log, **extra)
+                    first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=True, mode_grid=MODE_GRID, shadow_stop=False, temper=args.temper, field_steps=FIELD_STEPS,
+                    log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]
         theta = dataclasses.replace(theta, eta=np.asarray(to.eta) * k, zeta=np.asarray(to.zeta) * k, ell=to.ell,
@@ -138,13 +169,14 @@ def main():
                                     beta0=to.beta0, omega=to.omega, gain_db=to.gain_db)
         shape, eps = to.L, np.asarray(to.eps)
         psi = out["psi"]
-        save_depths(args.out.with_name(f"{args.out.stem}_k{k}.npz"), mesh, d, beta=beta, psi=psi, xi=xi)
+        state.update(k=k, **theta_arrays(to), **gn_history(out))
+        save_depths(args.out.with_name(f"{args.out.stem}_k{k}.npz"), mesh, d, beta=beta, psi=psi, xi=xi, **state)
         log(f"level k = {k} done: trend {np.round(beta, 3)}; beam centre {np.degrees(psi[:, 0]).round(1)}, "
             f"width {np.degrees(psi[:, 1]).round(1)} deg; shape {shape:.2f}, spike rates {eps.round(3)}")
 
     assert out is not None
     save_depths(args.out, mesh, d, beta=beta, sd_d=out["sd_d"], sd_beta=out["sd_beta"], psi=out["psi"], xi=xi,
-                **{k: out[k] for k in ("sd_psi", "sd_xi") if k in out})
+                **{k: out[k] for k in ("sd_psi", "sd_xi") if k in out}, **state)
     log(f"wrote {args.out}; total {(time.time() - t_start) / 60:.0f} min")
 
     # depth and uncertainty maps over the vertices the passes see
