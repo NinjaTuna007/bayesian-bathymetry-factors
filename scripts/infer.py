@@ -3,7 +3,9 @@ r"""Bathymetry from side-scan sonar: inference on patches of the prototype's cac
 
 Usage: python scripts/infer.py PATCHES.npz [--patches A B] [--out runs/<name>.npz]
 
-1. Mesh over the passes (h = 0.5 m, 10 m buffer); :math:`z_\mathrm{ref}` = median sonar height.
+1. The later passes are moved horizontally onto the first's texture (`bbf.match.align_passes`:
+   the navigation of passes minutes apart disagrees by metres, more than the reflectivity field's
+   range). Mesh over the passes (h = 0.5 m, 10 m buffer); :math:`z_\mathrm{ref}` = median sonar height.
 2. Start: the first echo of each ping-side gives the depth under the track; the prior is a
    constant mean (their median) plus an :math:`\alpha = 3` Matérn field, and the start depths are
    its conditional mean given the points. (A planar trend fitted to the first echoes tilts
@@ -43,7 +45,7 @@ from bbf.inference import init as I
 from bbf.inference.loop import infer
 from bbf.inference.multiscale import coarsen_pass, coarsen_theta
 from bbf.io import load_patch, save_depths
-from bbf.match import Reflectivity
+from bbf.match import Reflectivity, align_passes
 from bbf.ping import Theta, psi_of, u_grid
 from bbf.ping.first_return import FirstReturn
 
@@ -68,6 +70,7 @@ def main():
     ap.add_argument("patches", type=Path)
     ap.add_argument("--patches-used", nargs="+", default=["A", "B"], dest="names")
     ap.add_argument("--out", type=Path, default=Path("runs/inference.npz"))
+    ap.add_argument("--no-align", action="store_true", help="leave the later passes where the navigation has them")
     args = ap.parse_args()
     t_start = time.time()
 
@@ -75,6 +78,17 @@ def main():
     theta = Theta(noise=TVG.NOISE, L=L_SHAPE, eps=EPS, eta=10 * TVG.NOISE, zeta=100 * TVG.NOISE, ell=2.0,
                   log_kappa_mean=TVG.LOG_KAPPA_MEAN, log_kappa_std=2.0, gain_db=TVG.GAIN_DB,
                   noise_slope=TVG.NOISE_SLOPE, noise_power=TVG.NOISE_POWER)
+    # first echoes, and with them the horizontal offset of each later pass against the first
+    r0 = [I.first_echo(p, theta) for p in passes]
+    z_seabed = float(np.median(np.concatenate([I.first_echo_points(p, r) for p, r in zip(passes, r0)])[:, 2]))
+    if not args.no_align:
+        passes, found = align_passes(passes, r0, z_seabed)
+        for p, off in zip(passes[1:], found[1:]):
+            if off is None:
+                log(f"pass {p.name}: too little shared ground with {passes[0].name} for an offset")
+            else:
+                log(f"pass {p.name}: texture peak {off.corr:+.2f} ({off.z:.1f} sd; {off.corr_zero:+.2f} unmoved) at "
+                    f"({off.move[0]:+.2f}, {off.move[1]:+.2f}) m east, north: {'moved' if off.z >= 5.0 else 'left'}")
     mesh = I.mesh_for_passes(passes, h=H_MESH, buffer=BUFFER)
     log(f"{sum(p.n_pings for p in passes)} pings in {len(passes)} passes; mesh {mesh.n_vertices} vertices, "
         f"z_ref {mesh.z_ref:.2f}")
@@ -83,7 +97,6 @@ def main():
         return PR.Prior(mesh, RHO, SIGMA, mu_beta=beta, Sigma_beta=SIGMA_BETA, alpha=ALPHA)
 
     # start: first echoes under the tracks, the GMRF conditional mean elsewhere
-    r0 = [I.first_echo(p, theta) for p in passes]
     pts = np.concatenate([I.first_echo_points(p, r) for p, r in zip(passes, r0)])
     first_return = FirstReturn(r0)
     log(f"first echoes found on {np.mean(np.concatenate([np.isfinite(r).ravel() for r in r0])):.1%} of ping-sides")

@@ -164,3 +164,21 @@ def offset_between(a: Pass, b: Pass, r0_a, r0_b, z_seabed: float, cell: float = 
         if best is None or found.z > best.z:
             best = found
     return best
+
+
+def align_passes(passes: list[Pass], r0: list, z_seabed: float, min_z: float = 5.0,
+                 **kwargs) -> tuple[list[Pass], list[Offset | None]]:
+    r"""The passes with each one after the first moved onto the first's texture, and what was found per pass.
+
+    Each later pass is moved by `offset_between` against the first (kwargs go to it) when the peak
+    stands at least `min_z` robust standard deviations over its surface; otherwise, and where the
+    two share too few cells, it stays where the navigation has it. The entry of the first pass is
+    None. The moves are estimates to start from: an offset per pass is properly an unknown of the
+    graph.
+    """
+    out, found = [passes[0]], [None]
+    for ps, r in zip(passes[1:], r0[1:]):
+        off = offset_between(passes[0], ps, r0[0], r, z_seabed, **kwargs)
+        found.append(off)
+        out.append(ps.shifted(*off.move) if off is not None and off.z >= min_z else ps)
+    return out, found

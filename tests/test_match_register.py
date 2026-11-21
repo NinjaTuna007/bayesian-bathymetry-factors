@@ -87,3 +87,18 @@ def test_same_look_pairs_and_no_overlap():
     assert Rg.same_look_pairs(a, far) == [(0, 1), (1, 0)]
     r0 = np.full((40, 2), 20.0)
     assert Rg.offset_between(a, far, r0, r0, Z_SEABED) is None
+
+
+def test_align_passes_moves_the_later_pass_and_leaves_an_unclear_one():
+    """The second pass is moved back onto the first; a pass of pure speckle has no clear peak and stays."""
+    rng = np.random.default_rng(1)
+    a = a_pass("a", (-30.0, -8.0), np.pi / 2, 240, rng)
+    b = a_pass("b", (30.0, 8.0), -np.pi / 2, 240, rng, moved=(-2.5, 0.5))
+    noise = Pass(name="n", poses=b.poses, y=rng.gamma(2.0, 0.5, b.y.shape), dr=DR, t=b.t)
+    r0 = [np.full((240, 2), 20.0)] * 3
+    out, found = Rg.align_passes([a, b, noise], r0, Z_SEABED, cell=0.5, max_move=4.0, min_cells=300)
+    assert out[0] is a and found[0] is None
+    assert found[1] is not None and found[1].z > 5
+    np.testing.assert_allclose(out[1].poses[:, :2] - b.poses[:, :2], np.broadcast_to([2.5, -0.5], (240, 2)), atol=0.3)
+    np.testing.assert_array_equal(out[1].y, b.y)
+    assert found[2] is not None and found[2].z < 5 and out[2] is noise
