@@ -71,7 +71,7 @@ def ping_weights(problem: Problem, S, u_hat, uses):
             lm = math.log1p(-st.eps) + np.asarray(log_gamma(ys, th.L, Ib))
             ls = math.log(st.eps) + np.asarray(log_gamma(ys, 1.0, Isp))
             resp = np.exp(lm - np.logaddexp(lm, ls))  # the main component's responsibility
-            W[:, side] = np.where(use[:, side] & (y[:, side] > 0), th.L * resp, 0.0)
+            W[:, side] = np.where(use[:, side] & (y[:, side] > 0), problem.temper * th.L * resp, 0.0)
             ek = np.exp(up[:, side])[:, None]
             den = ek * Sp[:, side] + st.noise
             a[:, side] = ek / den
@@ -97,7 +97,7 @@ def shadow_rows(problem: Problem, S, u_hat):
                 return jax.jvp(lambda ss: lit_probability(ss, u, th, side), (s,), (jnp.ones_like(s),))
             p, dp = (np.asarray(x) for x in jax.vmap(lit)(jnp.asarray(Sp[:, side]), jnp.asarray(up[:, side])))
             p = np.clip(p, 1e-12, 1 - 1e-12)  # as in `log_shadow_side`
-            g = dp / ((1 - p) * B)  # per block, per bin of the block
+            g = math.sqrt(problem.temper) * dp / ((1 - p) * B)  # per block, per bin of the block
             g = g * ~np.asarray(problem.labels[p_i][:, side, :nb], dtype=bool)  # dark blocks only
             if problem.valid is not None:
                 g = g * problem.valid[p_i][:, side, :nb]
