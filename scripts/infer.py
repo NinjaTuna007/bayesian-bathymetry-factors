@@ -21,8 +21,10 @@ Usage: python scripts/infer.py PATCHES.npz [--patches A B] [--out runs/<name>.np
    :math:`kL`), and start each level from the level before. The gain is one fixed law for both sides and the background follows the range
    and the transmit power as the water column does (`scripts/tvg_theta.py`); blocks nearer than
    `MIN_RANGE` are left out. The lit/dark labels are relative to that gain and background, so the
-   scored bins do not depend on the sonar parameters :math:`\psi`, of which the beam centre and
-   width per side are unknowns of the graph with weak priors and the linear gain is held. The
+   scored bins do not depend on the sonar parameters :math:`\psi`. The beam is held at the 3DSS
+   defaults (centre :math:`50^\circ`, width :math:`60^\circ`): free, it fitted the relief the depths had
+   not yet taken up. `--free-beam` makes the beam centre and width per side unknowns of the graph
+   with weak priors; the linear gain is part of the gain law and stays held. The
    transmit power enters each ping's log-kappa prior as a known offset. The first echoes, detected
    once at full resolution, enter as the first-return factor (`bbf.ping.first_return`), which ties
    the seabed under the tracks to the measured range.
@@ -58,7 +60,7 @@ SIGMA_BETA = np.array([[100.0]])  # the constant mean: sd 10 m about the median 
 LEVELS = [(27, 1, 6), (9, 1, 6), (3, 2, 6)]  # (bins averaged, rounds, Gauss-Newton steps)
 RHO_XI, SIGMA_XI = 2.0, 1.0  # range (m) and sd of the log-reflectivity field
 PSI_SD = np.array([[np.radians(10.0), np.radians(15.0), 0.5]] * 2)  # beam centre, width (rad), gain (dB/m)
-PSI_HELD = np.array([[False, False, True]] * 2)  # the linear gain is part of the fixed gain law
+PSI_FREE_BEAM = np.array([[False, False, True]] * 2)  # held with --free-beam: the linear gain, part of the gain law
 
 
 def log(msg):
@@ -70,6 +72,7 @@ def main():
     ap.add_argument("patches", type=Path)
     ap.add_argument("--patches-used", nargs="+", default=["A", "B"], dest="names")
     ap.add_argument("--out", type=Path, default=Path("runs/inference.npz"))
+    ap.add_argument("--free-beam", action="store_true", help="fit the beam centre and width per side (default: held)")
     ap.add_argument("--no-align", action="store_true", help="leave the later passes where the navigation has them")
     args = ap.parse_args()
     t_start = time.time()
@@ -105,6 +108,7 @@ def main():
     log(f"first-echo start: {len(pts)} points, trend {np.round(beta, 3)}, "
         f"depth {np.percentile(d, 5):.1f}..{np.percentile(d, 95):.1f} m")
     psi_prior = (psi_of(theta), PSI_SD)
+    psi_held = PSI_FREE_BEAM if args.free_beam else np.ones((2, 3), bool)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     save_depths(args.out.with_name(args.out.stem + "_start.npz"), mesh, d, beta=beta)
 
@@ -122,7 +126,7 @@ def main():
         if li == len(LEVELS) - 1:
             extra["laplace_samples"] = 100
         out = infer(cp, mesh, prior_of(beta), th, d, beta, u, rounds=rounds, inner=inner, calib_every=50,
-                    chunk=32, psi_prior=psi_prior, psi_held=PSI_HELD, refl=refl, xi0=xi,
+                    chunk=32, psi_prior=psi_prior, psi_held=psi_held, refl=refl, xi0=xi,
                     first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=True, log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]

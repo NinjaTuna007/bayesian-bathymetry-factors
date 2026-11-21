@@ -156,6 +156,12 @@ def test_inference_holds_the_gain_with_the_beam_free():
         np.testing.assert_array_equal(lab, labels_of(ps, wrong))
     np.testing.assert_array_equal(out["sd_psi"][:, 2], 0.0)
     assert np.all(out["sd_psi"][:, :2] > 0)
+    # with the beam held too, psi is no unknown: it stays, and the depths alone answer the data
+    out = infer(passes, m, prior, wrong, jnp.asarray(d_true), np.array([0.0, 0.0, DEPTH]), u, rounds=1, inner=2,
+                calib_every=3, chunk=4, psi_prior=(psi0, sd), psi_held=np.ones((2, 3), bool), laplace_samples=5,
+                log=lambda s: None)
+    np.testing.assert_array_equal(out["psi"], psi0)
+    assert not out["problem"].free_psi and "sd_psi" not in out
 
 
 @pytest.mark.slow

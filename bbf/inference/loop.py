@@ -100,7 +100,9 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     started at theta's values. Otherwise it stays at theta's. psi_held: (2, 3) bool, the components
     of a free :math:`\psi` that stay at theta's all the same. The labels and the background are
     relative to the gain, so with the linear gain (the last column) held the scored bins do not
-    depend on :math:`\psi`.
+    depend on :math:`\psi`. With every component held, :math:`\psi` is no unknown at all (as without
+    psi_prior): on the real data a free beam fitted relief the depths had not yet taken up (a bank
+    in one swath moved that side's beam), so it is held until the geometry has moved.
 
     With `laplace_samples` > 0, also the Laplace posterior standard deviations of the depths
     (`sd_d`), trend (`sd_beta`) and field (`sd_xi`) at the final mode, from that many Monte Carlo samples.
@@ -122,6 +124,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
 
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
+    if psi_held is not None and np.all(psi_held):
+        psi_prior = psi_held = None
     poses = [p.local_poses(mesh.origin) for p in passes]
     ys = [p.y for p in passes]
     dr = passes[0].dr
