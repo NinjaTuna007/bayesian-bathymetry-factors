@@ -9,9 +9,10 @@ Each round, at the current depths, reflectivity and sonar parameters:
    (`bbf.inference.calibrate`) on every `calib_every`-th ping. With `fit_shape`, the first round
    also fits the gamma shape and the spike rates of this level's bins, once the field has had its
    first fit, and takes the labels again at the fitted shape;
-2. compute and freeze the per-ping-side Jacobians (and the beam derivatives of :math:`S` when
+2. compute the per-ping-side Jacobians (and the beam derivatives of :math:`S` when
    the sonar parameters :math:`\psi` are free);
-3. ascend the log posterior by Gauss--Newton (`bbf.inference.gauss_newton`), in the
+3. ascend the log posterior by Gauss--Newton (`bbf.inference.gauss_newton`), with the Jacobians
+   taken again after every step, in the
    log-reflectivity field :math:`\xi` when the problem has one (`refl`) and in :math:`\psi` when it
    is free, and carry the new :math:`\psi` into theta for the next round.
 
@@ -85,11 +86,12 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
           refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None, callback=None,
           min_range: float = 0.0, fit_shape: bool = False, psi_held=None, mode_grid: int = 0,
-          shadow_stop: bool = True, temper: float = 1.0, log=print) -> dict:
+          shadow_stop: bool = True, temper: float = 1.0, field_steps: int | None = None, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
-    the graph shared by all passes, started at xi0 (default: fitted at d0) and returned as `xi`. Without it
+    the graph shared by all passes, started at xi0 (default: fitted at d0, in at most `field_steps`
+    Gauss--Newton steps, default `inner`) and returned as `xi`. Without it
     each ping-side has its one reflectivity :math:`\kappa_{t,c}` and the passes are not matched.
 
     trend_search: in the first round, before Gauss--Newton, try these trends and keep the best
@@ -175,7 +177,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         if rnd == 0 and refl is not None and xi0 is None:
             fixed = dataclasses.replace(base, theta=theta)
             _, _, _, xi, _ = gauss_newton(fixed, d, beta, jacobians(fixed, d, xi), xi=xi, hold_depths=True,
-                                          max_iter=inner, log=log)
+                                          max_iter=inner if field_steps is None else field_steps, log=log)
             log(f"round {rnd}: reflectivity at the start depths, sd {xi.std():.2f}")
             S = render(base, d, xi=xi)
         if rnd == 0 and fit_shape:
@@ -187,7 +189,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
             f"zeta {np.asarray(theta.zeta)}, ell {np.asarray(theta.ell)}, "
             f"log kappa {np.asarray(theta.log_kappa_mean)} ± {np.asarray(theta.log_kappa_std)}")
         problem = dataclasses.replace(base, theta=theta, psi_prior=psi_prior, psi_held=psi_held)
-        # 2. frozen Jacobians, 3. Gauss-Newton
+        # 2. Jacobians, 3. Gauss-Newton
         tj = time.time()
         if rnd == 0 and trend_search is not None:
             from bbf.inference.search import search_trend
@@ -198,7 +200,12 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         J = jacobians(problem, d, xi)
         Jb = beam_jacobian(problem, d, xi=xi) if problem.free_psi else None
         log(f"round {rnd}: Jacobians in {time.time() - tj:.0f}s")
-        d, beta, psi, xi, hist = gauss_newton(problem, d, beta, J, Jb=Jb, xi=xi, max_iter=inner, log=log)
+
+        def relin(d, psi, xi, pb=problem):
+            at = dataclasses.replace(pb, theta=with_psi(pb.theta, psi))
+            return jacobians(at, d, xi), (beam_jacobian(pb, d, psi, xi=xi) if pb.free_psi else None)
+
+        d, beta, psi, xi, hist = gauss_newton(problem, d, beta, J, Jb=Jb, xi=xi, max_iter=inner, relin=relin, log=log)
         theta = with_psi(theta, psi)
         history.append({"round": rnd, "gn": hist, "time": time.time() - t0})
         if callback is not None:
