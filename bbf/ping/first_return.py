@@ -38,7 +38,7 @@ import scipy.sparse as sp
 from bbf import mesh as M
 from bbf.ping import geometry as G
 
-SIGMA, SIGMA_WIDE, EPS, TAU, DU = 0.15, 2.0, 0.2, 0.02, 0.05
+SIGMA, SIGMA_WIDE, EPS, TAU, DU, ROW_TOL = 0.15, 2.0, 0.2, 0.02, 0.05, 1e-2
 
 
 @dataclass(frozen=True, eq=False)
@@ -48,7 +48,8 @@ class FirstReturn:
     sigma, sigma_wide, eps: standard deviations (m) of the detected first echo about the nearest
     seabed range, and the weight of the wide one; tau: soft-min temperature (m); du: horizontal
     step (m) of the curve samples, out to the largest :math:`r_0` (the nearest point is never
-    farther out horizontally than its slant range).
+    farther out horizontally than its slant range); row_tol: GGN row entries below this fraction
+    of the row's largest are dropped (the gradient keeps them all).
     """
     r0: list[np.ndarray]
     sigma: float = SIGMA
@@ -56,6 +57,7 @@ class FirstReturn:
     eps: float = EPS
     tau: float = TAU
     du: float = DU
+    row_tol: float = ROW_TOL
 
     @cached_property
     def per_ping(self) -> list[np.ndarray]:
@@ -138,7 +140,10 @@ def first_return_term(mesh: M.Mesh, d, poses: list[np.ndarray], fr: FirstReturn,
             total += float(lp.sum())
             vid, coef = vid[use].reshape(len(lp), -1), coef[use].reshape(len(lp), -1)
             np.add.at(grad, vid, g[:, None] * coef)
-            keep = coef != 0
+            # the GGN keeps each row's entries above `fr.row_tol` of its largest: near a flat nadir
+            # the soft-min spreads over metres of curve, and :math:`A^\top W A` would fill a dense block
+            # of hundreds of vertices per ping
+            keep = np.abs(coef) > fr.row_tol * np.abs(coef).max(axis=1, keepdims=True)
             rr = np.broadcast_to(np.arange(m, m + len(lp))[:, None], coef.shape)
             rows.append(rr[keep])
             cols.append(vid[keep])

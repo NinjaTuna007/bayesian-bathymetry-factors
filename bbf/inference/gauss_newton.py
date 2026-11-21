@@ -14,6 +14,11 @@ Each step in :math:`\xi` is limited to `XI_MAX_STEP` per vertex. A bin far brigh
 curvature :math:`L`, so the Gauss--Newton step overshoots by :math:`e^{\Delta} / \Delta` for a deficit of
 :math:`\Delta` log units; and since the spike component bounds what any one bin can lose, the
 line search would accept a vertex sent to :math:`\xi \sim 100` by such a step.
+
+Each step in d is likewise limited to `D_MAX_STEP` per vertex. Where the beam barely sees the
+seabed the data curvature of a vertex is small against its gradient, and a step there was
+seen to move single vertices by 100 m on the real data, accepted because the rest of the step
+gained more than the prior charged for the spike.
 """
 import time
 
@@ -26,6 +31,7 @@ from bbf.inference.objective import Problem, data_term, value, value_and_grad
 from bbf.ping.theta import psi_of
 
 XI_MAX_STEP = 2.0  # largest change of a vertex's log reflectivity in one step
+D_MAX_STEP = 1.0  # largest change of a vertex's depth (m) in one step
 
 def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_depths: bool = False,
                  max_iter: int = 10, tol: float = 1e-5, lam: float = 1e-3, max_tries: int = 10, log=print):
@@ -82,7 +88,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             except CholmodNotPositiveDefiniteError:
                 lam *= 10.0  # treat as a rejected step: more damping
                 continue
-            dd, db = delta[:n], delta[ib:ib + nb]
+            dd, db = np.clip(delta[:n], -D_MAX_STEP, D_MAX_STEP), delta[ib:ib + nb]
             if field:
                 dx = np.clip(delta[ix:ix + n], -XI_MAX_STEP, XI_MAX_STEP)
             if free:
