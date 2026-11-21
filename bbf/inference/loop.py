@@ -82,7 +82,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           inner: int = 10, calib_every: int = 50, chunk: int = 32, seed: int = 0,
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
           refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None, callback=None,
-          min_range: float = 0.0, log=print) -> dict:
+          min_range: float = 0.0, fit_shape: bool = False, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -107,6 +107,9 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     min_range: blocks nearer than this (m) are left out of both the ping and the shadow factor,
     e.g. the sonar's own ringing and sensor-fixed lines in the near water column, which otherwise
     set the spike parameters; it must stay short of the nearest seabed.
+
+    fit_shape: refit the gamma shape and the spike rates with the spike parameters each round
+    (`bbf.inference.calibrate`), instead of keeping theta's.
 
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
@@ -140,7 +143,9 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         use_c = np.concatenate([np.stack([ping_use(lab[t], ys[0].shape[-1], theta.block, valid=val[t]) for t in s])
                                 for lab, val, s in zip(labels, valid, sub)])
         theta, fit = calibrate(y_c, S_c, use_c, theta, dr,
-                               offset=np.concatenate([o[s] for o, s in zip(offsets, sub)]))
+                               offset=np.concatenate([o[s] for o, s in zip(offsets, sub)]), fit_shape=fit_shape)
+        if fit_shape:
+            log(f"round {rnd}: shape L {theta.L:.2f}, spike rates {np.asarray(theta.eps).round(3)}")
         log(f"round {rnd}: theta fit (converged {fit['converged']}): eta {np.asarray(theta.eta)}, "
             f"zeta {np.asarray(theta.zeta)}, ell {np.asarray(theta.ell)}, "
             f"log kappa {np.asarray(theta.log_kappa_mean)} ± {np.asarray(theta.log_kappa_std)}")

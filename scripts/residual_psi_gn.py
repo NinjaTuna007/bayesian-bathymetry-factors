@@ -74,6 +74,7 @@ def main():
     ap.add_argument("--beam", type=float, nargs=2, default=None, metavar=("CENTRE", "WIDTH"),
                     help="start and prior mean of the beam, degrees (default: the 3DSS defaults)")
     ap.add_argument("--hold-depths", action="store_true")
+    ap.add_argument("--fit-shape", action="store_true", help="refit the gamma shape and spike rates each round")
     ap.add_argument("--beam-response", nargs=2, default=None, metavar=("SCORES.json", "MODEL"),
                     help="a free beam response on top of the Gaussian (`Theta.beam_knots`): the piecewise-linear law a "
                          "candidate of scripts/residual_models.py fitted, e.g. beam-spline")
@@ -130,7 +131,8 @@ def main():
         d_out = d
     else:
         out = infer(cp, mesh, prior, th, d, beta, u, rounds=args.rounds, inner=args.inner, calib_every=20, chunk=32,
-                    psi_prior=psi_prior, refl=refl, xi0=xi0, first_return=first_return, min_range=min_range, log=log)
+                    psi_prior=psi_prior, refl=refl, xi0=xi0, first_return=first_return, min_range=min_range,
+                    fit_shape=args.fit_shape, log=log)
         for r in out["history"]:
             traj += [h["psi"].tolist() for h in r["gn"] if "psi" in h]
         ell = out["history"][-1]["gn"][-1]["ell"]

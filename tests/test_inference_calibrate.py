@@ -53,3 +53,30 @@ def test_calibrate_respects_bounds_when_unidentified():
     ell = np.asarray(fit.ell)
     assert np.all((ell >= 0.2 - 1e-9) & (ell <= 20.0 + 1e-9))
     assert fit.log_kappa_std == pytest.approx(np.array([0.5, 0.5]))
+
+
+def test_calibrate_fits_shape_and_spike_rate():
+    """With `fit_shape`, data of shape 2.5 and spike rates 0.05, 0.1 are fitted back from the values a level would assume."""
+    rng = np.random.default_rng(2)
+    r = np.arange(N_BINS) * DR
+    S_one = np.where(r > 5, 1e-4 * (5 / np.maximum(r, 5)) ** 3, 0.0)
+    m = 40
+    true = Theta(noise=1e-7, L=2.5, eps=[0.05, 0.1], eta=[3e-5, 1e-5], zeta=1e-12, ell=1.0,
+                 log_kappa_mean=0.0, log_kappa_std=0.4)
+    S = np.tile(S_one, (m, 2, 1))
+    u = rng.normal(0.0, 0.4, (m, 2))
+    y = np.zeros((m, 2, N_BINS))
+    for c in (0, 1):
+        I_bar, I_sp = (np.asarray(a) for a in F.predicted(jnp.asarray(S[:, c]), u[:, c, None], true, c, DR))
+        spike = rng.random((m, N_BINS)) < true.at(c).eps
+        y[:, c] = np.where(spike, rng.exponential(I_sp), rng.gamma(true.L, I_bar / true.L))
+    start = Theta(noise=1e-7, L=13.0, eps=[0.4, 0.4], eta=1e-5, zeta=1e-12, ell=1.0, log_kappa_mean=0.0, log_kappa_std=1.0)
+    fit, info = calibrate(y, S, np.ones_like(y, bool), start, DR, fit_shape=True)
+    assert info["converged"]
+    assert fit.L == pytest.approx(2.5, rel=0.05)
+    np.testing.assert_allclose(np.asarray(fit.eps), [0.05, 0.1], rtol=0.2)
+    np.testing.assert_allclose(np.log(np.asarray(fit.eta)), np.log([3e-5, 1e-5]), atol=0.3)
+    assert np.sqrt(np.mean((info["u"] - u) ** 2)) < 0.05
+    # without it the shape and the rates stay, and the fit is far worse
+    kept, plain = calibrate(y, S, np.ones_like(y, bool), start, DR)
+    assert kept.L == 13.0 and np.all(np.asarray(kept.eps) == 0.4) and plain["nll"] > info["nll"] + 1000.0
