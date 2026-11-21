@@ -1,0 +1,26 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-af17dc724744bfbb3' is dirty
+[16:08:24] round 0: theta fit (converged True): eta [1.21286763e+12 2.26108221e+13], zeta [3.14287702e+09 3.19190000e+09], ell [1.95172183 1.81563898], log kappa [39.06859561 37.11196724] ± [0.61420829 1.39879095]
+[16:08:43] round 0: Jacobians in 18s
+[16:09:56]   GN start: ell = -10858013.6
+[16:11:03] state: ell -10858014 = intensities -10838915 + first return -6627 + priors
+[16:15:18] Gauss-Newton step: nearly undamped max |dd| 54.2 m, predicted gain 32258; in the trust region (lambda 1.0) max |dd| 0.11 m, predicted gain 6983
+[16:15:35] band (m across A's track, starboard +): vertices | grad intensities, first return, prior (mean per vertex) | GN step raw, trust (mean, m) | to the bank start (mean, m)
+[16:15:35]     -30..  -20:  4839 |     +0.21     -0.03     +0.00 |   +0.00 (|.| 0.16) +0.000 |  -0.05; data curvature 709.3; cos(step, need) -0.21
+[16:15:35]     -20..  -14:  3448 |     +3.02     -0.28     -0.00 |   -0.05 (|.| 0.20) -0.000 |  -0.04; data curvature 1864.9; cos(step, need) -0.09
+[16:15:35]     -14..   -8:  3290 |     +2.55     -0.31     +0.00 |   -0.04 (|.| 0.24) -0.000 |  -0.25; data curvature 1995.1; cos(step, need) +0.09
+[16:15:35]      -8..   -2:  3088 |     -0.38     +0.00     +0.00 |   +0.08 (|.| 0.35) -0.000 |  -0.60; data curvature 342.2; cos(step, need) -0.10
+[16:15:35]      -2..   +2:  1961 |     +1.36     -0.93     -0.00 |   -0.41 (|.| 0.87) -0.001 |  -0.36; data curvature 2226.2; cos(step, need) +0.32
+[16:15:35]      +2..   +8:  2757 |     -2.02     -0.02     -0.00 |   -0.22 (|.| 0.79) -0.001 |  -4.07; data curvature 1811.0; cos(step, need) +0.04
+[16:15:35]      +8..  +14:  2561 |     +0.63     +0.00     -0.00 |   +0.03 (|.| 0.20) +0.000 |  -5.32; data curvature 814.2; cos(step, need) -0.09
+[16:15:35]     +14..  +20:  2365 |     -0.15     +0.00     +0.00 |   +0.03 (|.| 0.16) +0.000 |  -0.71; data curvature 1337.8; cos(step, need) +0.00
+[16:15:35]     +20..  +30:  3275 |     -0.52     -0.00     -0.00 |   -0.01 (|.| 0.15) -0.000 |  -0.06; data curvature 1819.1; cos(step, need) -0.12
+[16:15:35] A port: 971 scored bins between the first echo and the model's first return (0.8% of the side's scored bins), +30 dB over the background; spike component takes 98% of them; log density per bin -28.8 against -28.4 elsewhere; they hold 0.0e+00 of the side's |dS/dd|
+[16:15:35] A stbd: 7113 scored bins between the first echo and the model's first return (6.2% of the side's scored bins), +55 dB over the background; spike component takes 100% of them; log density per bin -37.5 against -28.2 elsewhere; they hold 1.3e-07 of the side's |dS/dd|
+[16:15:35] path from the state to the bank start (field held): t | intensities, first return, depth prior, total (minus the state's)
+[16:15:51]   t = 0.00:          +0        +0        +0          +0
+[16:16:03]   t = 0.10:      -24019      -223       +23      -24219
+[16:16:19]   t = 0.25:      -49633      -464       +49      -50048
+[16:16:35]   t = 0.50:      -93007      -569       +68      -93508
+[16:16:46]   t = 0.75:     -152472      -290       +58     -152704
+[16:17:02]   t = 1.00:     -220240     +1281       +18     -218941
+[16:17:02] wrote runs/bank_t27b.json
