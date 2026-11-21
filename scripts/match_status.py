@@ -25,6 +25,10 @@ passes' agreement contributes to the step in :math:`d`.
 The fit between the passes is checked on ground cells (`bbf.match.cells`): the scores :math:`z`
 of the cell residuals are standard normal when the passes agree up to speckle.
 
+The sonar's transmit power steps from 10% to 50% inside pass A (at ping 147 of the cache's
+patch; the cache does not hold the power yet). The step is common to a ping, so the ping-side
+gains :math:`\kappa_{t,c}` take it up and the field does not see it; the fitted step is printed.
+
 Uses only the intensities and the navigation; the 3DSS bathymetry is never read.
 """
 import argparse
@@ -45,7 +49,7 @@ from bbf import match as Mt
 from bbf import prior as PR
 from bbf.inference import init as I
 from bbf.inference.gauss_newton import gauss_newton
-from bbf.inference.loop import jacobians, labels_of, observed_vertices
+from bbf.inference.loop import jacobians, labels_of
 from bbf.inference.multiscale import coarsen_pass, coarsen_theta
 from bbf.inference.objective import Problem, value_and_grad
 from bbf.io import load_patch
@@ -110,6 +114,7 @@ def main():
     ap.add_argument("--sigma", type=float, default=1.0)
     ap.add_argument("--rounds", type=int, default=2)
     ap.add_argument("--inner", type=int, default=6)
+    ap.add_argument("--power-step", type=int, default=147, help="first ping of pass A at 50%% transmit power")
     ap.add_argument("--out", type=Path, default=Path("figs/match_status.png"))
     args = ap.parse_args()
 
@@ -153,28 +158,41 @@ def main():
     fits = [fit_field(pb, d, beta, args.rounds, args.inner) for pb in single]
     g = det["grad_d_data"]
     g_sep = fits[0][1]["grad_d_data"] + fits[1][1]["grad_d_data"]
-    seen = [observed_vertices(pb, d) for pb in single]
+    # vertices each pass sees: those in a ground cell holding one of its footprints
+    vcell = np.floor(mesh.vertices / args.cell).astype(np.int64)
+    seen = []
+    for f in fp:
+        cells = {tuple(c) for c in np.unique(np.floor(f[np.isfinite(f).all(axis=-1)] / args.cell).astype(np.int64), axis=0).tolist()}
+        seen.append(np.array([tuple(c) in cells for c in vcell.tolist()]))
     ov = seen[0] & seen[1]
     M = ev - fits[0][2] - fits[1][2]
     _, e1, z1, _ = cell_check(both, fp, det["S"], det["u"], args.cell)
-    log(f"shared field: data term {det['data']:.0f} (+{det['data'] - det0['data']:.0f}), xi sd {xi[seen[0] | seen[1]].std():.2f}, "
+    log(f"shared field: data term {det['data']:.0f} (+{det['data'] - det0['data']:.0f}), xi sd {xi[seen[0] | seen[1]].std():.2f} "
+        f"(range {xi.min():+.1f} to {xi.max():+.1f}), "
         f"left |grad_xi| {np.linalg.norm(det['grad_xi']):.3g}")
     log(f"  cell score z: {spread(z1)}; residual e IQR {np.subtract(*np.percentile(e1, [75, 25])):.2f}")
     log(f"  match evidence M = {M:.0f} nats ({M / max(len(z1), 1):.1f} per shared cell)")
     log(f"  |grad_d| data {np.linalg.norm(g):.3g}; passes apart {np.linalg.norm(g_sep):.3g}; "
         f"match (grad M) {np.linalg.norm(g - g_sep):.3g} = {np.linalg.norm(g - g_sep) / np.linalg.norm(g):.1%} of the data gradient "
         f"({np.linalg.norm((g - g_sep)[ov]) / np.linalg.norm(g[ov]):.1%} over the {ov.sum()} vertices both passes see)")
+    # pass A's transmit power steps from 10% to 50% at this ping: the ping-side gains take the step up
+    ua, k = det["u"][0], args.power_step
+    log(f"  log kappa of A, pings from {k} minus those before: port {ua[k:, 0].mean() - ua[:k, 0].mean():+.2f}, "
+        f"starboard {ua[k:, 1].mean() - ua[:k, 1].mean():+.2f} (log 5 = {np.log(5):.2f})")
     dxi = fits[1][0] - fits[0][0]
+    for name, (x, _, _) in zip("AB", fits):
+        log(f"  field of {name} alone: range {x.min():+.1f} to {x.max():+.1f}")
     log(f"  per-pass fields differ over the overlap by sd {dxi[ov].std():.2f} (median {np.median(dxi[ov]):+.2f})")
 
     # figure
     v = mesh.vertices
     fig, ax = plt.subplots(2, 3, figsize=(17, 10))
-    zs = np.linspace(-12, 12, 121)
-    ax[0, 0].hist(np.clip(z0, -12, 12), bins=zs.tolist(), density=True, histtype="step", color=BLUE, lw=2, label="uniform reflectivity")
-    ax[0, 0].hist(np.clip(z1, -12, 12), bins=zs.tolist(), density=True, histtype="step", color=ORANGE, lw=2, label="shared field")
-    ax[0, 0].plot(zs, np.exp(-0.5 * zs**2) / np.sqrt(2 * np.pi), color=INK, lw=1, label="speckle alone")
-    ax[0, 0].set(xlabel="cell score z (clipped at 12)", ylabel="density", title=f"Pass A against B on {args.cell:g} m ground cells")
+    es = np.linspace(-6, 6, 97)
+    ax[0, 0].hist(e0, bins=es.tolist(), density=True, histtype="step", color=BLUE, lw=2, label="uniform reflectivity")
+    ax[0, 0].hist(e1, bins=es.tolist(), density=True, histtype="step", color=ORANGE, lw=2, label="shared field")
+    ax[0, 0].axvline(0, color=INK, lw=1)
+    ax[0, 0].set(xlabel="cell residual e (log); speckle alone is about 0.1 wide", ylabel="density",
+                 title=f"Pass A against B on {args.cell:g} m ground cells")
     ax[0, 0].legend(frameon=False)
     for a, e, name in ((ax[0, 1], e0, "uniform reflectivity"), (ax[0, 2], e1, "shared field")):
         sc = a.scatter(rr[:, 0], rr[:, 1], c=e, s=3, cmap=DIVERGING, vmin=-3, vmax=3, linewidths=0)
