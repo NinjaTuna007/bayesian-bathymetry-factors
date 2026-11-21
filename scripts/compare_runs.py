@@ -11,10 +11,10 @@ Each state is a file `scripts/infer.py` wrote. Per state the script reports:
 2. the predictive log density per bin of the scored pings, at the state's own level and noise
    model, over every bin beyond `MIN_RANGE` (one :math:`\log\kappa` per ping-side is fitted to the
    ping itself). The scored pings are those the state's run left out (`--hold-out`), else every
-   `--score-every`-th: for a state fitted on all pings they are in-sample. Next to it the
-   same bins scored by a plain gamma density about the predicted mean with the shape that suits
-   the state best, which leaves the noise model out of the comparison, and the variance of
-   :math:`\log(y / \bar I)`;
+   `--score-every`-th: for a state fitted on all pings they are in-sample. Next to it, over the
+   bins where the predicted seabed echo exceeds the background, a plain gamma density about the
+   predicted mean with the shape that suits the state best, which leaves the noise model out of
+   the comparison, and the variance of :math:`\log(y / \bar I)`;
 3. the standard deviation, over the vertices both passes see, of the difference between the
    log-reflectivity fields fitted to each pass alone at the state's depths (level `--field-k`);
 4. cross-track profiles of the seabed through three pings of the first pass, with each side's
@@ -60,6 +60,7 @@ from bbf.ping import (
     unit_intensities,
     with_psi,
 )
+from bbf.ping.factor import background
 from bbf.ping.first_return import TAU, FirstReturn, _batched
 from bbf.ping.geometry import side_frame
 
@@ -158,21 +159,23 @@ def score(st: State, passes, idx) -> dict:
             def one(yy, SS, uu, oo, c=c, dr=cp.dr):
                 u_hat, _ = mode(th, c, dr, yy, SS, uu, offset=oo, grid=49)
                 I_bar, I_sp = predicted(SS, u_hat, th, c, dr, oo)
-                return log_mixture(jnp.where(uu, yy, 1.0), I_bar, I_sp, th.L, th.at(c).eps), I_bar
+                echo = jnp.exp(u_hat) * SS > background(th, c, bin_ranges(SS.shape[-1], dr), oo)
+                return log_mixture(jnp.where(uu, yy, 1.0), I_bar, I_sp, th.L, th.at(c).eps), I_bar, echo
 
-            lp, I_bar = (np.asarray(a) for a in jax.jit(jax.vmap(one))(jnp.asarray(y), jnp.asarray(S[:, c]),
-                                                                       jnp.asarray(use), jnp.asarray(off)))
+            lp, I_bar, echo = (np.asarray(a) for a in jax.jit(jax.vmap(one))(jnp.asarray(y), jnp.asarray(S[:, c]),
+                                                                             jnp.asarray(use), jnp.asarray(off)))
             lls.append(lp[use].sum())
             n_bins += int(use.sum())
-            ys.append(y[use])
-            means.append(I_bar[use])
-            res.append(np.log(y[use] / I_bar[use]))
+            echo = use & echo  # bins where the predicted seabed echo exceeds the background
+            ys.append(y[echo])
+            means.append(I_bar[echo])
+            res.append(np.log(y[echo] / I_bar[echo]))
     y, mean, res = np.concatenate(ys), np.concatenate(means), np.concatenate(res)
     shapes = np.exp(np.linspace(-3.0, 4.0, 141))
     by_shape = np.array([float(np.mean(np.asarray(log_gamma(y, sh, mean)))) for sh in shapes])
     best = int(np.argmax(by_shape))
     return {"ll_bin": float(np.sum(lls) / n_bins), "ll_bin_gamma": float(by_shape[best]), "gamma_shape": float(shapes[best]),
-            "var_log_resid": float(np.var(res)), "bins": n_bins, "level": st.k}
+            "var_log_resid": float(np.var(res)), "bins": n_bins, "echo_bins": len(y), "level": st.k}
 
 
 def field_difference(st: State, passes, k: int, steps: int) -> dict:
@@ -275,7 +278,7 @@ def main():
             rec["score"] = score(st, passes, idx)
             sc = rec["score"]
             log(f"{st.name}: log density per bin {sc['ll_bin']:+.4f} at k = {sc['level']} over {sc['bins']} bins "
-                f"({'held out' if st.hold_out else 'in sample'}); gamma about the mean {sc['ll_bin_gamma']:+.4f} "
+                f"({'held out' if st.hold_out else 'in sample'}); echo bins: gamma about the mean {sc['ll_bin_gamma']:+.4f} "
                 f"(shape {sc['gamma_shape']:.2f}); var log(y / mean) {sc['var_log_resid']:.2f}")
         if not args.no_fields and st.has_field:
             rec["fields"] = field_difference(st, passes, args.field_k, args.field_steps)
