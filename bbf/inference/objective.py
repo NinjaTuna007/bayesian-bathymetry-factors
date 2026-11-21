@@ -58,6 +58,7 @@ class Problem:
     valid: list[np.ndarray] | None = None  # per pass (n, 2, n_blocks): blocks to use (see onset_valid)
     psi_prior: tuple[np.ndarray, np.ndarray] | None = None  # (mean, sd) of psi (2, 3); None: psi fixed
     refl: Reflectivity | None = None  # prior of the log-reflectivity field xi; None: no field
+    kappa_offset: list[np.ndarray] | None = None  # per pass (n,): known shift of the log-kappa prior mean (log power)
 
     @property
     def free_psi(self) -> bool:
@@ -197,12 +198,14 @@ def data_term(problem: Problem, warm: bool = False):
     ys = [jnp.asarray(y) for y in pb.y]
     labels = [jnp.asarray(lab) for lab in pb.labels]
     valids = [jnp.ones(lab.shape, bool) for lab in labels] if pb.valid is None else [jnp.asarray(v) for v in pb.valid]
+    offsets = ([jnp.zeros(y.shape[0]) for y in ys] if pb.kappa_offset is None
+               else [jnp.asarray(o, dtype=float) for o in pb.kappa_offset])
 
-    def side_terms(th, side, y, S, use, lab, val, u0):
+    def side_terms(th, side, y, S, use, lab, val, u0, off):
         if warm:
-            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, u0=u0, iters=WARM_ITERS)
+            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, u0=u0, iters=WARM_ITERS, offset=off)
         else:
-            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use)
+            ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, offset=off)
         return ping + log_shadow_side(th, side, lab, S, u_hat, val), u_hat
 
     psi0 = _psi(pb, None)
@@ -212,11 +215,12 @@ def data_term(problem: Problem, warm: bool = False):
         total, u_hats = 0.0, []
         if u0_list is None:
             u0_list = [jnp.zeros(y.shape[:2]) for y in ys]
-        for y, S, use, lab, val, u0 in zip(ys, S_list, uses, labels, valids, u0_list):
+        for y, S, use, lab, val, u0, off in zip(ys, S_list, uses, labels, valids, u0_list, offsets):
             us = []
             for side in (0, 1):
-                v, uh = jax.vmap(lambda yy, SS, uu, ll, vv, u0s, side=side: side_terms(th, side, yy, SS, uu, ll, vv, u0s))(
-                    y[:, side], S[:, side], use[:, side], lab[:, side], val[:, side], u0[:, side])
+                v, uh = jax.vmap(lambda yy, SS, uu, ll, vv, u0s, oo, side=side:
+                                 side_terms(th, side, yy, SS, uu, ll, vv, u0s, oo))(
+                    y[:, side], S[:, side], use[:, side], lab[:, side], val[:, side], u0[:, side], off)
                 total = total + v.sum()
                 us.append(uh)
             u_hats.append(jnp.stack(us, axis=1))

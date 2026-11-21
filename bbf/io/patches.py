@@ -21,13 +21,21 @@ class Pass:
 
     poses: (n, 6) world poses :math:`(x, y, z, \phi_r, \phi_p, \psi)`; y: (n, 2, B)
     intensities (amplitude squared), sides port and starboard; dr: bin spacing
-    :math:`\Delta r` (m); t: (n,) ping times (s).
+    :math:`\Delta r` (m); t: (n,) ping times (s); power: (n,) transmit power (percent), None
+    when the cache lacks it.
     """
     name: str
     poses: np.ndarray
     y: np.ndarray
     dr: float
     t: np.ndarray
+    power: np.ndarray | None = None
+
+    def log_power(self) -> np.ndarray:
+        r"""Known per-ping shift of :math:`\log\kappa`: :math:`\log(P_t / 100)`, zero without the power."""
+        if self.power is None:
+            return np.zeros(self.n_pings)
+        return np.log(np.asarray(self.power, dtype=float) / 100.0)
 
     @property
     def n_pings(self) -> int:
@@ -81,4 +89,5 @@ def load_patch(path, name: str, use_stamps: bool = True) -> Pass:
     if use_stamps and "stamp_ns" in f:
         t, poses = retime(t, f["stamp_ns"], poses)
     y = np.stack([f["port"], f["starboard"]], axis=1).astype(float) ** 2
-    return Pass(name=name, poses=poses, y=y, dr=float(f["range_res"]), t=t)
+    power = f["transmit_power"].astype(float) if "transmit_power" in f else None
+    return Pass(name=name, poses=poses, y=y, dr=float(f["range_res"]), t=t, power=power)

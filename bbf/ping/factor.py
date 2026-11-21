@@ -74,8 +74,12 @@ def log_mixture(y, I_bar, I_sp, L: float, eps: float):
     return jnp.logaddexp(math.log1p(-eps) + log_gamma(y, L, I_bar), math.log(eps) + log_gamma(y, 1.0, I_sp))
 
 
-def _objective(theta: Theta, side: int, dr: float, y, S, use):
-    r""":math:`F(u)` for one side: the bins in `use` plus the Gaussian prior on :math:`u`."""
+def _objective(theta: Theta, side: int, dr: float, y, S, use, offset=0.0):
+    r""":math:`F(u)` for one side: the bins in `use` plus the Gaussian prior on :math:`u`.
+
+    offset: a known shift :math:`o` of the prior mean, :math:`u \sim \mathcal{N}(m + o, s^2)`, e.g.
+    the log of the ping's transmit power; equivalent to scaling :math:`S` by :math:`e^{o}`.
+    """
     st = theta.at(side)
     ok = use & (y > 0)
     y_safe = jnp.where(ok, y, 1.0)
@@ -83,20 +87,20 @@ def _objective(theta: Theta, side: int, dr: float, y, S, use):
     def F(u):
         I_bar, I_sp = predicted(S, u, theta, side, dr)
         lp = jnp.where(ok, log_mixture(y_safe, I_bar, I_sp, theta.L, st.eps), 0.0)
-        z = (u - st.log_kappa_mean) / st.log_kappa_std
+        z = (u - st.log_kappa_mean - offset) / st.log_kappa_std
         return lp.sum() - 0.5 * z**2 - math.log(st.log_kappa_std) - 0.5 * math.log(2 * math.pi)
 
     return F, ok, y_safe
 
 
-def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS):
+def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS, offset=0.0):
     r"""Mode :math:`\hat u` of :math:`F` and the curvature :math:`H = -F''(\hat u)`, differentiable in S.
 
     u0: a starting value, e.g. the previous evaluation's mode (default: a moment estimate);
     iters: damped Newton iterations, which can be few from a warm start.
     """
     st = theta.at(side)
-    F, ok, y_safe = _objective(theta, side, dr, y, S, use)
+    F, ok, y_safe = _objective(theta, side, dr, y, S, use, offset)
     dF = jax.grad(F)
     d2F = jax.grad(dF)
     prior_prec = 1.0 / st.log_kappa_std**2
@@ -108,7 +112,7 @@ def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NE
     den = jnp.sum(jnp.where(ok, S, 0.0))
     good = (num > 0) & (den > 0)
     if u0 is None:
-        u0 = jnp.where(good, jnp.log(jnp.where(good, num / jnp.where(den > 0, den, 1.0), 1.0)), st.log_kappa_mean)
+        u0 = jnp.where(good, jnp.log(jnp.where(good, num / jnp.where(den > 0, den, 1.0), 1.0)), st.log_kappa_mean + offset)
 
     def step(_, u):
         h = jnp.maximum(-d2F(u), prior_prec)  # keep the step uphill where F is not concave
@@ -125,13 +129,15 @@ def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NE
     return u_hat, jnp.maximum(-d2F(u_hat), prior_prec)
 
 
-def laplace_ping_side(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS):
+def laplace_ping_side(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS,
+                      offset=0.0):
     r"""(:math:`\log \int \prod_b p(y_b \mid S, u)\, p(u)\, \mathrm{d}u` by Laplace, :math:`\hat u`) for one side.
 
-    u0, iters: as in `mode` (a warm start and few iterations within an optimiser's loop).
+    u0, iters: as in `mode` (a warm start and few iterations within an optimiser's loop); offset:
+    the known shift of the prior mean of :math:`u` (`_objective`).
     """
-    F, _, _ = _objective(theta, side, dr, y, S, use)
-    u_hat, H = mode(theta, side, dr, y, S, use, u0=u0, iters=iters)
+    F, _, _ = _objective(theta, side, dr, y, S, use, offset)
+    u_hat, H = mode(theta, side, dr, y, S, use, u0=u0, iters=iters, offset=offset)
     return F(u_hat) + 0.5 * math.log(2 * math.pi) - 0.5 * jnp.log(H), u_hat
 
 

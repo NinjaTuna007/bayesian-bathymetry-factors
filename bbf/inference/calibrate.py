@@ -21,13 +21,15 @@ ELL_BOUNDS = (0.2, 20.0)  # ringing decay length (m), as in the prototype
 LEVEL_FLOOR = 1e-3  # spike and ringing levels at least this fraction of the noise
 
 
-def calibrate(y, S, use, theta: Theta, dr: float, min_log_kappa_std: float = 0.5) -> tuple[Theta, dict]:
+def calibrate(y, S, use, theta: Theta, dr: float, min_log_kappa_std: float = 0.5,
+              offset=None) -> tuple[Theta, dict]:
     r"""Fitted copy of `theta` and fit details, from intensities y, unit intensities S and use masks (m, 2, B).
 
     Returns `theta` with :math:`\eta_c, \zeta_c, \ell_c` replaced and the log-:math:`\kappa` prior set
     to the mean and standard deviation (at least `min_log_kappa_std`) of the fitted
     :math:`\hat u` per side; the dict holds :math:`\hat u` (m, 2), the negative log likelihood and
-    whether the optimiser converged.
+    whether the optimiser converged. offset (m,): the known shift of each ping's log-:math:`\kappa`
+    prior mean (`Problem.kappa_offset`), removed from :math:`\hat u` before its mean and spread.
     """
     y, S, use = (np.asarray(a) for a in (y, S, use))
     m, _, n_bins = y.shape
@@ -66,10 +68,11 @@ def calibrate(y, S, use, theta: Theta, dr: float, min_log_kappa_std: float = 0.5
                    method="L-BFGS-B", bounds=bounds, options={"maxiter": 3000})
     x = res.x
     u_hat = x[6:].reshape(m, 2)
+    u_rel = u_hat - (0.0 if offset is None else np.asarray(offset, dtype=float)[:, None])
     scored = ok.any(axis=2)  # ping-sides with at least one scored bin
-    mean = np.array([u_hat[scored[:, c], c].mean() if scored[:, c].any() else theta.at(c).log_kappa_mean
+    mean = np.array([u_rel[scored[:, c], c].mean() if scored[:, c].any() else theta.at(c).log_kappa_mean
                      for c in (0, 1)])
-    std = np.array([max(u_hat[scored[:, c], c].std(), min_log_kappa_std) if scored[:, c].sum() > 1
+    std = np.array([max(u_rel[scored[:, c], c].std(), min_log_kappa_std) if scored[:, c].sum() > 1
                     else theta.at(c).log_kappa_std for c in (0, 1)])
     fitted = dataclasses.replace(theta, eta=np.exp(x[0:2]), zeta=np.exp(x[2:4]), ell=np.exp(x[4:6]),
                                  log_kappa_mean=mean, log_kappa_std=std)

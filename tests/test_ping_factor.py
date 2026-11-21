@@ -159,3 +159,18 @@ def test_mode_curvature_is_floored_at_the_prior():
     y = simulate(th, 0, S, 0.0, rng)
     _, H = F.mode(th, 0, DR, jnp.asarray(y), jnp.asarray(S), jnp.ones(N_BINS, bool))
     assert float(H) >= 1 / 0.7**2 - 1e-9
+
+
+def test_offset_equals_scaling_the_unit_intensity():
+    r"""A known prior shift :math:`o` (e.g. log transmit power) is the same model as :math:`S e^{o}`: same evidence, :math:`\hat u` shifted by :math:`o`."""
+    th = make_theta(std=0.8)
+    rng = np.random.default_rng(5)
+    S = fake_S(rng)
+    o = math.log(0.2)
+    y = simulate(th, 0, S * math.exp(o), 0.3, rng)
+    args = (th, 0, DR, jnp.asarray(y))
+    use = jnp.ones(N_BINS, bool)
+    v_off, u_off = F.laplace_ping_side(*args, jnp.asarray(S), use, offset=o)
+    v_scl, u_scl = F.laplace_ping_side(*args, jnp.asarray(S * math.exp(o)), use)
+    assert float(v_off) == pytest.approx(float(v_scl), abs=1e-6)
+    assert float(u_off) == pytest.approx(float(u_scl) + o, abs=1e-6)

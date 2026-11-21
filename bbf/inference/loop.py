@@ -101,6 +101,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     block_dr = theta.block * dr
     d, beta = np.asarray(d0, dtype=float), np.asarray(beta0, dtype=float)
     xi = np.zeros(mesh.n_vertices) if xi0 is None else np.asarray(xi0, dtype=float)
+    offsets = [p.log_power() for p in passes]  # transmit power: a known per-ping gain
     history = []
     problem = None
     for rnd in range(rounds):
@@ -113,7 +114,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         valid = [onset_valid(r, lab.shape[-1], block_dr, onset) for r, lab in zip(r0, labels)]
         theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
         base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk,
-                       valid=valid, refl=refl)
+                       valid=valid, refl=refl, kappa_offset=offsets)
         S = render(base, d, xi=xi)
         # 1. theta at the current depths, on a subset of pings
         sub = [np.arange(0, len(p), calib_every) for p in poses]
@@ -121,7 +122,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         S_c = np.concatenate([Sp[s] for Sp, s in zip(S, sub)])
         use_c = np.concatenate([np.stack([ping_use(lab[t], ys[0].shape[-1], theta.block, valid=val[t]) for t in s])
                                 for lab, val, s in zip(labels, valid, sub)])
-        theta, fit = calibrate(y_c, S_c, use_c, theta, dr)
+        theta, fit = calibrate(y_c, S_c, use_c, theta, dr,
+                               offset=np.concatenate([o[s] for o, s in zip(offsets, sub)]))
         log(f"round {rnd}: theta fit (converged {fit['converged']}): eta {np.asarray(theta.eta)}, "
             f"zeta {np.asarray(theta.zeta)}, ell {np.asarray(theta.ell)}, "
             f"log kappa {np.asarray(theta.log_kappa_mean)} ± {np.asarray(theta.log_kappa_std)}")
