@@ -2,9 +2,10 @@ r"""Outer loop of inference (paper, Alg. 1), with lit/shadow labels in place of 
 
 Each round, at the current depths, reflectivity and sonar parameters:
 
-1. label the blocks lit or dark and find each ping-side's first echo, both from the data
-   relative to the current gain: labels in the echo's onset zone are left out, and the
-   water column before it gives the measured lit rate of blocks without a seabed echo;
+1. find each ping-side's first echo, measure the noise floor by range from the water column
+   before it, and label the blocks lit or dark against that floor (not against the model's
+   gain, which moves with :math:`\psi`): labels in the echo's onset zone are left out, and the
+   water column gives the measured lit rate of blocks without a seabed echo;
    render every ping; refit the spike parameters and the log-:math:`\kappa` prior
    (`bbf.inference.calibrate`) on every `calib_every`-th ping;
 2. compute and freeze the per-ping-side Jacobians (and the beam derivatives of :math:`S` when
@@ -35,8 +36,9 @@ from bbf.io import Pass
 from bbf.match import Reflectivity
 from bbf.mesh import locate
 from bbf.ping.first_return import FirstReturn
+from bbf.ping.horizon import Horizon, scored_blocks
 from bbf.ping.geometry import trace
-from bbf.ping.shadow import block_labels, onset_valid, ping_use, water_column_lit_rate
+from bbf.ping.shadow import block_labels, measured_floor, onset_valid, ping_use, water_column_lit_rate
 from bbf.ping.theta import Theta, psi_of, with_psi
 from bbf.prior import Prior
 
@@ -76,8 +78,8 @@ def observed_vertices(problem: Problem, d) -> np.ndarray:
 def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0, u, rounds: int = 3,
           inner: int = 10, calib_every: int = 50, chunk: int = 32, seed: int = 0,
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
-          refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None, callback=None,
-          log=print) -> dict:
+          refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None,
+          horizon: Horizon | None = None, label_floor: bool = True, callback=None, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -99,6 +101,13 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     (`bbf.ping.first_return`); it ties the seabed under the tracks, where the beam predicts little
     energy, to the measured range. Its r0 must come from these passes.
 
+    horizon: the horizon factor's constants (`bbf.ping.horizon`); with it, the labels are scored
+    against the line-of-sight margin of the predicted seabed instead of the dark-block shadow
+    term, on the blocks `scored_blocks` picks each round from the labels and first echoes.
+
+    label_floor: label the blocks against the noise floor measured from the water column
+    (`bbf.ping.shadow.measured_floor`) instead of the model's :math:`g(r) N`, which moves with :math:`\psi`.
+
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
     poses = [p.local_poses(mesh.origin) for p in passes]
@@ -115,13 +124,25 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         # labels and first echoes from the data, with the current gain (it moves when psi is
         # free): the echo's onset zone is left out, and the water column before it gives the
         # lit rate of blocks without a seabed echo, by range
-        labels = [labels_of(p, theta) for p in passes]
         r0 = [first_echo(p, theta) for p in passes]
+        if label_floor:
+            theta = dataclasses.replace(theta, floor=measured_floor(ys, r0, theta, dr, onset))
+        labels = [labels_of(p, theta) for p in passes]
         valid = [onset_valid(r, lab.shape[-1], block_dr, onset) for r, lab in zip(r0, labels)]
+        rb = (np.arange(labels[0].shape[-1]) + 0.5) * block_dr
+        lit = [np.mean(np.concatenate([lab[:, c][rb[None] > np.asarray(r)[:, c:c + 1]] for lab, r in zip(labels, r0)]))
+               for c in (0, 1)]
+        log(f"round {rnd}: lit past the first echo: port {lit[0]:.0%}, starboard {lit[1]:.0%}"
+            f" (labels against the {'measured floor' if label_floor else 'model gain'})")
         theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
+        hz = None
+        if horizon is not None:
+            hz = dataclasses.replace(horizon, use=scored_blocks(labels, valid, r0, block_dr, horizon.max_gap))
+            log(f"round {rnd}: horizon factor scores {sum(int(h.sum()) for h in hz.use)} blocks, "
+                f"{sum(int((h & ~lab).sum()) for h, lab in zip(hz.use, labels))} of them dark")
         base = Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr, chunk=chunk,
                        valid=valid, refl=refl, kappa_offset=offsets,
-                       first_return=first_return)
+                       first_return=first_return, horizon=hz)
         S = render(base, d, xi=xi)
         # 1. theta at the current depths, on a subset of pings
         sub = [np.arange(0, len(p), calib_every) for p in poses]

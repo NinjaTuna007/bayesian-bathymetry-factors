@@ -15,7 +15,9 @@ likelihood in a scalar prediction and :math:`G` that prediction's derivative:
   :math:`\partial\log\bar I_b/\partial u = e^u S_b / (e^u S_b + N)`;
 * dark shadow block :math:`j` (lit blocks are left to the ping factor): prediction :math:`p_j`,
   weight :math:`1/(1 - p_j)^2`, the curvature of :math:`-\log(1 - p_j)` in :math:`p_j`, through the
-  block mean of :math:`S` with :math:`\hat\kappa` held fixed;
+  block mean of :math:`S` with :math:`\hat\kappa` held fixed; or, with the horizon factor
+  (`bbf.ping.horizon`), its rows on the depths in place of these;
+* the first-return and horizon factors: their own rows :math:`A` and weights :math:`W` on the depths;
 
 plus the prior's exact precision on :math:`(d, \beta)`, that of :math:`\xi`, and the Gaussian prior
 on each :math:`u`.
@@ -94,7 +96,7 @@ def shadow_rows(problem: Problem, S, u_hat):
         nb = Sp.shape[-1] // B
         for side in (0, 1):
             def lit(s, u, side=side):
-                return jax.jvp(lambda ss: lit_probability(ss, u, th, side), (s,), (jnp.ones_like(s),))
+                return jax.jvp(lambda ss: lit_probability(ss, u, th, side, problem.dr), (s,), (jnp.ones_like(s),))
             p, dp = (np.asarray(x) for x in jax.vmap(lit)(jnp.asarray(Sp[:, side]), jnp.asarray(up[:, side])))
             p = np.clip(p, 1e-12, 1 - 1e-12)  # as in `log_shadow_side`
             g = dp / ((1 - p) * B)  # per block, per bin of the block
@@ -107,7 +109,7 @@ def shadow_rows(problem: Problem, S, u_hat):
 
 
 def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None, S0=None,
-             fr=None) -> sp.csc_matrix:
+             fr=None, hz=None) -> sp.csc_matrix:
     r"""The augmented GGN matrix :math:`H` (size from `layout`), symmetric positive semidefinite plus priors.
 
     J[p][t][c]: the frozen Jacobian of pass p, ping t, side c, (B, n) or (B, 2n) with the field.
@@ -121,7 +123,8 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
     grow by :math:`e^{\delta}`, and so does :math:`S_b`: the rescaled rows follow, the frozen ones do not.
 
     fr: the first-return factor's rows A (m, n) and weights W (m,) (`value_and_grad`'s details),
-    adding :math:`A^\top W A` to the depth block.
+    adding :math:`A^\top W A` to the depth block; hz: the same for the horizon factor. With
+    `Problem.horizon` set, the dark-block shadow rows are left out, as the data term leaves them out.
     """
     if psi is not None:
         problem = dataclasses.replace(problem, theta=with_psi(problem.theta, psi))
@@ -133,7 +136,7 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
     size = lay["size"]
     uses = problem.uses()
     pw = ping_weights(problem, S, u_hat, uses)
-    sh = shadow_rows(problem, S, u_hat)
+    sh = shadow_rows(problem, S, u_hat) if problem.horizon is None else None
     rows_i, rows_j, vals = [], [], []
 
     n, nf, ip = lay["n"], lay["nf"], lay["psi"]
@@ -175,11 +178,13 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
         h_uu = np.bincount(ps, w * c_**2, n_ps) + np.tile(1.0 / std**2, n_ps // 2)
         add(sp.coo_matrix((h_uu, (u0 + np.arange(n_ps), u0 + np.arange(n_ps))), shape=(size, size)))
         # shadow blocks: one row per block, sum of its bins' J rows times the coefficient
-        keep = np.tile(in_block, n_ps)
-        block = ps * nb + np.minimum(row % nbin // B, nb - 1)
-        agg = sp.csr_matrix((sh[p].ravel()[keep], (block[keep], row[keep])), shape=(n_ps * nb, len(w)))
-        G = agg @ Jp
-        add(G.T @ G)
+        agg = G = None
+        if sh is not None:
+            keep = np.tile(in_block, n_ps)
+            block = ps * nb + np.minimum(row % nbin // B, nb - 1)
+            agg = sp.csr_matrix((sh[p].ravel()[keep], (block[keep], row[keep])), shape=(n_ps * nb, len(w)))
+            G = agg @ Jp
+            add(G.T @ G)
         if free:
             # psi columns of each bin, in its own side's three: :math:`a\,\partial S/\partial(\beta_0, \omega)` and :math:`\partial \log g/\partial g_1`
             own = np.repeat(np.eye(2, dtype=bool)[ps % 2], 3, axis=1)  # (rows, 6): the bin's side's columns
@@ -188,9 +193,10 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
             H_fpsi += Jp.T @ ((w * a_)[:, None] * Gp)
             H_xpsi[u0 - nf: u0 - nf + n_ps] += np.column_stack([np.bincount(ps, w * c_ * Gp[:, k], n_ps) for k in range(6)])
             H_xpsi[ip - nf: ip - nf + 6] += Gp.T @ (w[:, None] * Gp)
-            Gs = agg @ dS  # the gain does not enter p_j
-            H_fpsi += G.T @ Gs
-            H_xpsi[ip - nf: ip - nf + 6] += Gs.T @ Gs
+            if agg is not None and G is not None:
+                Gs = agg @ dS  # the gain does not enter p_j
+                H_fpsi += G.T @ Gs
+                H_xpsi[ip - nf: ip - nf + 6] += Gs.T @ Gs
     if free:
         H_xpsi[ip - nf: ip - nf + 6] = 0.5 * (H_xpsi[ip - nf: ip - nf + 6] + H_xpsi[ip - nf: ip - nf + 6].T)
         dpsi = sp.coo_matrix(np.vstack([H_fpsi, H_xpsi]))  # rows: every variable, columns: psi
@@ -207,10 +213,11 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
     Pr = problem.prior.joint_precision().tocoo()
     at = np.concatenate([np.arange(n), lay["beta"] + np.arange(lay["n_beta"])])
     add(sp.coo_matrix((Pr.data, (at[Pr.row], at[Pr.col])), shape=(size, size)))
-    if fr is not None:
-        A, W = fr
-        Hf = (A.T @ sp.diags(W) @ A).tocoo()
-        add(sp.coo_matrix((Hf.data, (Hf.row, Hf.col)), shape=(size, size)))
+    for rows in (fr, hz):
+        if rows is not None:
+            A, W = rows
+            Hf = (A.T @ sp.diags(W) @ A).tocoo()
+            add(sp.coo_matrix((Hf.data, (Hf.row, Hf.col)), shape=(size, size)))
     if problem.refl is not None:
         Lx = problem.refl.Lambda.tocoo()
         add(sp.coo_matrix((Lx.data, (Lx.row + lay["xi"], Lx.col + lay["xi"])), shape=(size, size)))

@@ -66,6 +66,9 @@ class Theta:
     seabed echo by range (ringing, volume scatter, spikes), from
     `bbf.ping.shadow.water_column_lit_rate`; otherwise that rate is
     :math:`\epsilon_B + (1 - \epsilon_B) p_\mathrm{fa}` with :math:`\epsilon_B = 1 - (1 - \epsilon_c)^B`.
+    `floor` (2, n_blocks), if given, is the measured mean block intensity without a seabed echo,
+    by range (`bbf.ping.shadow.measured_floor`): labels are taken against it instead of
+    :math:`g_c(r) N_c`, so they do not move with the gain.
 
     `z_water` is the world height of the water surface: seabed above it returns no echo.
     """
@@ -86,6 +89,7 @@ class Theta:
     block: int = 8
     label_fa: float = 0.01
     wc_lit: npt.ArrayLike | None = None
+    floor: npt.ArrayLike | None = None
     z_water: float = math.inf
 
     def __post_init__(self):
@@ -95,6 +99,8 @@ class Theta:
             object.__setattr__(self, "gain_db", np.array(self.gain_db, dtype=float).reshape(2, 3))
         if self.wc_lit is not None:
             object.__setattr__(self, "wc_lit", np.array(self.wc_lit, dtype=float).reshape(2, -1))
+        if self.floor is not None:
+            object.__setattr__(self, "floor", np.array(self.floor, dtype=float).reshape(2, -1))
 
     def at(self, side: int) -> SideTheta:
         """Per-side parameters of `side` (0 port, 1 starboard)."""

@@ -1,19 +1,23 @@
 r"""The shadow factor: lit/shadow labels of range blocks against the predicted visibility.
 
 Each side's bins are grouped into blocks of :math:`B` bins (`Theta.block`). A block is
-labelled *lit* when its mean noise-relative intensity exceeds a threshold,
+labelled *lit* when its mean intensity over the floor without a seabed echo exceeds a threshold,
 
 .. math::
 
-    \ell_j = \Bigl[\tfrac{1}{B} \sum_{b \in j} \frac{y_b}{g_c(r_b) N_c} > T\Bigr],
+    \ell_j = \Bigl[\tfrac{1}{B} \sum_{b \in j} \frac{y_b}{F_{c,j}} > T\Bigr],
 
 with :math:`T` the :math:`1 - p_\mathrm{fa}` quantile of :math:`\mathrm{Gam}(BL, \text{mean } 1)`,
 so a noise-only block is labelled lit with probability :math:`p_\mathrm{fa}` (`Theta.label_fa`).
+The floor :math:`F_{c,j}` is measured from the water column by range (`measured_floor`,
+`Theta.floor`); without it, it is the model's :math:`g_c(r_b) N_c`, which moves with the gain:
+on real data a fitted gain that rose with range labelled nearly all of a side's far seabed
+dark, which dropped it from the ping factor and left nothing to pull the gain back.
 Labels come from the data and are held fixed while the depths are refined.
 
-The predicted mean of that statistic is :math:`m_j = 1 + \kappa \bar S_j / N_c`, with
-:math:`\bar S_j` the block mean of the unit intensity (shadows included through the
-visibility). Moment-matching the block mean by :math:`\mathrm{Gam}(BL, \text{mean } m_j)`, the
+The predicted mean of that statistic is :math:`m_j = 1 + \kappa \bar S_j / N_c`, or with the
+measured floor :math:`m_j = 1 + \kappa\, \overline{g S}_j / F_{c,j}`, with :math:`\bar S_j` the block
+mean of the unit intensity (shadows included through the visibility). Moment-matching the block mean by :math:`\mathrm{Gam}(BL, \text{mean } m_j)`, the
 block passes the threshold with probability :math:`D(m_j) = 1 - P(BL, BL\,T/m_j)`, with :math:`P` the
 regularised lower incomplete gamma function. Blocks without a seabed echo are still lit at a
 rate :math:`p_0` from ringing, volume scatter and spikes, so (`lit_probability`)
@@ -37,6 +41,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.scipy.special import gammainc
 from scipy.special import gammaincinv
+from scipy.stats import gamma as gamma_dist
 
 from bbf import mesh as M
 from bbf.ping import render as Rn
@@ -57,11 +62,71 @@ def _blocks(x, block: int):
 
 
 def block_labels(y, theta: Theta, side: int, dr: float) -> np.ndarray:
-    r"""Lit (True) / shadow (False) label of each block (..., n_blocks) from measured intensities y (..., n_bins)."""
+    r"""Lit (True) / shadow (False) label of each block (..., n_blocks) from measured intensities y (..., n_bins).
+
+    Against the measured floor `Theta.floor` when set, else against :math:`g_c(r) N_c`.
+    """
     st = theta.at(side)
     y = np.asarray(y, dtype=float)
+    if theta.floor is not None:
+        m = np.asarray(_blocks(y, theta.block))
+        return m / _floor_side(theta, side, m.shape[-1]) > threshold(theta)
     g = np.exp(np.asarray(log_gain(bin_ranges(y.shape[-1], dr), st.gain_db)))
     return np.asarray(_blocks(y / (g * st.noise), theta.block)) > threshold(theta)
+
+
+def _floor_side(theta: Theta, side: int, n_blocks: int) -> np.ndarray:
+    """The measured floor (n_blocks,) of one side, continued at its last value."""
+    f = np.asarray(theta.floor)[side]
+    if len(f) < n_blocks:
+        f = np.concatenate([f, np.full(n_blocks - len(f), f[-1])])
+    return f[:n_blocks]
+
+
+def measured_floor(ys: list, r0: list, theta: Theta, dr: float, onset: float = 1.5, smooth: float = 1.0,
+                   min_count: int | None = None, min_frac: float = 0.5) -> np.ndarray:
+    r"""Mean block intensity (2, n_blocks) without a seabed echo, by range, from the water column.
+
+    ys: per pass (n, 2, n_bins) intensities; r0: per pass (n, 2) first echoes. Per side and
+    block, the median over pings of the block means that end more than `onset` m before the
+    ping-side's first echo, scaled to a mean by the median-to-mean ratio of
+    :math:`\mathrm{Gam}(BL)` (medians keep fish and spikes out), smoothed over `smooth` m.
+    Beyond the deepest water column seen, it continues at the median of the outer half of the
+    measured range: no ping sees the noise behind the seabed's echo. A block needs `min_count`
+    water-column pings (default 20, or half the pings when there are fewer) and at least
+    `min_frac` of the pings with a first echo: the few pings still in the water column at
+    longer ranges are mostly ones whose first echo was found late, and their "water column"
+    there is seabed (on real port data it put the floor at the seabed's level beyond 22 m).
+    """
+    if min_count is None:
+        min_count = min(20, max(1, sum(len(y) for y in ys) // 2))
+    B = theta.block
+    k = B * theta.L
+    to_mean = k / float(gamma_dist.ppf(0.5, k))
+    n_blocks = ys[0].shape[-1] // B
+    rb = (np.arange(n_blocks) + 1.0) * B * dr  # block ends
+    w = max(round(smooth / (B * dr)), 1)
+    out = np.zeros((2, n_blocks))
+    for c in (0, 1):
+        means = np.concatenate([np.asarray(_blocks(np.asarray(y)[:, c], B)) for y in ys])
+        wc = np.concatenate([rb[None, :] < np.asarray(r, float)[:, c][:, None] - onset for r in r0])
+        vals = np.where(wc, means, np.nan)
+        cnt = wc.sum(axis=0)
+        n_echo = sum(int(np.isfinite(np.asarray(r, float)[:, c]).sum()) for r in r0)
+        med = np.full(n_blocks, np.nan)
+        ok = (cnt >= min_count) & (cnt >= min_frac * n_echo)
+        med[ok] = np.nanmedian(vals[:, ok], axis=0) * to_mean
+        idx = np.flatnonzero(ok)
+        if len(idx) == 0:
+            raise ValueError(f"side {c}: no water column with {min_count} pings to measure the floor")
+        sm = np.exp(np.convolve(np.log(np.where(ok, med, 1.0)), np.ones(w), "same")
+                    / np.maximum(np.convolve(ok.astype(float), np.ones(w), "same"), 1e-12))
+        sm = np.where(ok, sm, np.nan)
+        fill = float(np.nanmedian(sm[idx[len(idx) // 2]:idx[-1] + 1]))
+        sm[idx[-1] + 1:] = fill
+        sm[: idx[0]] = sm[idx[0]]
+        out[c] = np.nan_to_num(sm, nan=fill)
+    return out
 
 
 def block_mask(labels, n_bins: int, block: int):
@@ -83,7 +148,7 @@ def noise_lit_rate(theta: Theta, side: int, n_blocks: int) -> np.ndarray:
     return rate[:n_blocks]
 
 
-def lit_probability(S, log_kappa, theta: Theta, side: int):
+def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = None):
     r"""Predicted :math:`p(\ell_j = \text{lit} \mid d)` (n_blocks,) from the unit intensity S (n_bins,).
 
     With :math:`D(m) = 1 - P(BL, BL\,T/m)` the chance that a block of mean ratio :math:`m` passes the
@@ -94,21 +159,29 @@ def lit_probability(S, log_kappa, theta: Theta, side: int):
         p = p_0 + (1 - p_0) \frac{D(m) - p_\mathrm{fa}}{1 - p_\mathrm{fa}},
 
     which is :math:`p_0` where the seabed predicts nothing and tends to 1 for a strong echo.
+    With the measured floor (`Theta.floor`), :math:`m` is taken against it and needs the bin spacing dr.
     """
     k = theta.block * theta.L
-    m = 1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / theta.at(side).noise
+    if theta.floor is None:
+        m = 1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / theta.at(side).noise
+    else:
+        if dr is None:
+            raise ValueError("lit_probability with a measured floor needs the bin spacing dr")
+        g = jnp.exp(log_gain(bin_ranges(S.shape[-1], dr), jnp.asarray(theta.gain_db)[side]))
+        nb = S.shape[-1] // theta.block
+        m = 1.0 + jnp.exp(log_kappa) * _blocks(g * S, theta.block) / jnp.asarray(_floor_side(theta, side, nb))
     D = 1.0 - gammainc(k, k * threshold(theta) / m)
     p0 = jnp.asarray(noise_lit_rate(theta, side, m.shape[-1]))
     fa = theta.label_fa
     return p0 + (1.0 - p0) * (D - fa) / (1.0 - fa)
 
 
-def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None):
+def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None, dr: float | None = None):
     r""":math:`\sum_j \log(1 - p_j)` over the valid dark blocks of one side; `log_kappa` is held fixed.
 
     Lit blocks are left to the ping factor, which scores their intensities.
     """
-    p = lit_probability(S, jax.lax.stop_gradient(log_kappa), theta, side)
+    p = lit_probability(S, jax.lax.stop_gradient(log_kappa), theta, side, dr)
     p = jnp.clip(p, 1e-12, 1.0 - 1e-12)
     dark = ~jnp.asarray(labels, dtype=bool)
     if valid is not None:
@@ -174,7 +247,7 @@ def log_shadow_factor(mesh: M.Mesh, d, pose, labels, theta: Theta, u, dr: float,
     for side in (0, 1):
         S = Rn.unit_intensity(mesh, d, pose, side, theta, u, n_bins, dr)
         total = total + log_shadow_side(theta, side, labels[side], S, log_kappa[side],
-                                        None if valid is None else valid[side])
+                                        None if valid is None else valid[side], dr)
     return total
 
 

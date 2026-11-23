@@ -62,7 +62,7 @@ def _scorer(theta: Theta, side: int, dr: float, n_bins: int, iters: int = SCAN_I
     def one(pose, y, use, labels, valid, u, D, slope):
         S = plane_unit_intensity(pose, side, theta, D, slope, u, n_bins, dr)
         ping, u_hat = laplace_ping_side(theta, side, dr, y, S, use, iters=iters)
-        return ping + log_shadow_side(theta, side, labels, S, u_hat, valid)
+        return ping + log_shadow_side(theta, side, labels, S, u_hat, valid, dr)
     return jax.jit(jax.vmap(one, in_axes=(None, None, None, None, None, None, 0, 0)))
 
 

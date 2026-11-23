@@ -72,7 +72,8 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     log(f"  GN start: ell = {ell:.1f}")
     for it in range(max_iter):
         t0 = time.time()
-        H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, S0=S0, fr=det["first_return"])
+        H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, S0=S0, fr=det["first_return"],
+                         hz=det["horizon"])
         g = np.zeros(lay["size"])
         g[:n], g[ib:ib + nb] = gd, gb
         if field:

@@ -149,3 +149,49 @@ def test_seabed_above_the_waterline_returns_nothing():
     wet = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, th, U, N_BINS, DR))
     dry = np.asarray(Rn.unit_intensity(m, d, LEVEL, STARBOARD, dataclasses.replace(th, z_water=-25.0), U, N_BINS, DR))
     assert wet.sum() > 0 and dry.sum() == 0
+
+
+def test_measured_floor_recovers_a_falling_noise_profile():
+    """Noise that falls with range (as port's water column does) is measured, and labels against it hit p_fa."""
+    import dataclasses
+    th = make_theta(eps=1e-12)
+    rng = np.random.default_rng(7)
+    n, nb, B = 400, 100, th.block
+    r_bin = np.arange(nb * B) * DR
+    floor_true = 1e9 * np.exp(-r_bin / 2.0) + 2e8  # intensity units, no gain applied
+    r0 = np.stack([rng.uniform(3.5, 4.8, n), rng.uniform(3.5, 4.8, n)], axis=1)
+    y = rng.gamma(th.L, floor_true / th.L, size=(n, 2, nb * B))
+    y = np.where(r_bin[None, None, :] >= r0[..., None], y + 1e11, y)  # seabed beyond the first echo
+    F = Sh.measured_floor([y], [r0], th, DR, onset=0.5, smooth=0.4)
+    blk_true = floor_true[: nb * B].reshape(nb, B).mean(1)
+    rb_end = (np.arange(nb) + 1) * B * DR
+    seen = rb_end < 3.0  # water column of every ping
+    np.testing.assert_allclose(F[:, seen], np.broadcast_to(blk_true[seen], (2, seen.sum())), rtol=0.12)
+    thf = dataclasses.replace(th, floor=F)
+    noise = rng.gamma(th.L, floor_true / th.L, size=(4000, nb * B))[:, : 3 * B]
+    rate = Sh.block_labels(noise, thf, 0, DR).mean()
+    assert rate == pytest.approx(th.label_fa, abs=0.01)
+    # labels no longer move with the gain
+    steep = dataclasses.replace(thf, gain_db=np.array([[0.0, 2.0, 0.0], [0.0, 2.0, 0.0]]))
+    np.testing.assert_array_equal(Sh.block_labels(y[:5, 0], thf, 0, DR), Sh.block_labels(y[:5, 0], steep, 0, DR))
+
+
+def test_lit_probability_against_the_floor():
+    """With the floor, no echo gives p0, a strong echo gives 1, and the block mean is matched as simulated."""
+    import dataclasses
+    th = dataclasses.replace(make_theta(), floor=np.full((2, 100), 3e-7))
+    p_dark = np.asarray(Sh.lit_probability(jnp.zeros(80), 0.0, th, 0, DR))
+    np.testing.assert_allclose(p_dark, Sh.noise_lit_rate(th, 0, 10), atol=1e-12)
+    assert np.asarray(Sh.lit_probability(jnp.full(80, 1e-3), 0.0, th, 0, DR)).min() > 0.999
+    with pytest.raises(ValueError):
+        Sh.lit_probability(jnp.zeros(80), 0.0, th, 0)
+    rng = np.random.default_rng(8)
+    st = th.at(STARBOARD)
+    S = np.full(8 * 3000, 3e-8)
+    g = np.exp(np.asarray(F.log_gain(F.bin_ranges(8 * 3000, DR), st.gain_db)))
+    # data whose noise is the floor itself (not g N), plus the gained echo
+    y = rng.gamma(th.L, (g * S + 3e-7) / th.L)
+    observed = Sh.block_labels(y, th, STARBOARD, DR).mean()
+    predicted = float(np.asarray(Sh.lit_probability(jnp.asarray(S), 0.0, th, STARBOARD, DR)).mean())
+    assert 0.1 < predicted < 0.95  # the range where the comparison says something
+    assert observed == pytest.approx(predicted, abs=0.03)
