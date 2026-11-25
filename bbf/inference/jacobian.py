@@ -63,7 +63,7 @@ def _batched(mesh: M.Mesh, key: tuple, side: int, u_key: tuple, dr: float, field
     model and :math:`\psi` change between rounds.
     """
     u = np.asarray(u_key)
-    _, _, margin, z_water = key
+    margin, z_water = key[2], key[3]
     idx = np.searchsorted(u, u - margin, side="right") - 1
     has = jnp.asarray(idx >= 0)
     idx0 = jnp.asarray(np.maximum(idx, 0))

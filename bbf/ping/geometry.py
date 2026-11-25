@@ -100,10 +100,11 @@ def echo(theta: Theta, pose, side: int, P, n):
 
     .. math::
 
-        a_c = B(\beta_c) \cos^2\varphi \, \frac{e^{-4 \alpha r}}{r^3}, \qquad
+        a_c = B_c(\beta_c) \cos^2\varphi \, \frac{e^{-4 \alpha r}}{r^3}, \qquad
         \cos\varphi = \max(0, -n^\top e),
 
-    without the visibility, which the caller applies. Faces seen from below get zero.
+    without the visibility, which the caller applies. Faces seen from below get zero. :math:`B_c` is
+    the Gaussian beam times :math:`e^{\Delta_c(\beta)}` when theta has `beam_knots` (`Theta`).
     """
     s, R = pose_frame(pose)
     axes = R @ jnp.asarray(R_MOUNT[side])
@@ -112,8 +113,10 @@ def echo(theta: Theta, pose, side: int, P, n):
     e = v / r[:, None]
     beta = jnp.arctan2(e @ axes[:, 2], e @ axes[:, 1])
     cos_phi = jnp.maximum(-jnp.sum(n * e, axis=-1), 0.0)
-    B = jnp.exp(-4 * math.log(2) * (beta - theta.beta0[side]) ** 2 / theta.omega[side] ** 2)
-    return B * cos_phi**2 * jnp.exp(-4 * theta.alpha * r) / r**3, r
+    log_B = -4 * math.log(2) * (beta - theta.beta0[side]) ** 2 / theta.omega[side] ** 2
+    if theta.beam_knots is not None:
+        log_B = log_B + jnp.interp(beta, jnp.asarray(theta.beam_knots), jnp.asarray(theta.beam_log)[side])
+    return jnp.exp(log_B) * cos_phi**2 * jnp.exp(-4 * theta.alpha * r) / r**3, r
 
 
 def knife_edge(nu):

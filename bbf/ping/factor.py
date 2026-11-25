@@ -9,7 +9,7 @@ For side :math:`c` with unit intensities :math:`S_b` (see `render.unit_intensity
     \bar I_b(u) = g_c(r_b) \bigl(e^u S_b + N_c\bigr), \qquad
     \bar I_{\mathrm{sp},b}(u) = \bar I_b(u) + g_c(r_b) \bigl(\eta_c + \zeta_c e^{-r_b / \ell_c}\bigr),
 
-and each bin is the mixture
+(:math:`N_c` may follow the range and the transmit power, see `background`) and each bin is the mixture
 :math:`(1 - \epsilon_c) \mathrm{Gam}(y_b \mid L, \bar I_b) + \epsilon_c \mathrm{Gam}(y_b \mid 1, \bar I_{\mathrm{sp},b})`.
 With :math:`F(u) = \sum_b \log p(y_b \mid u) + \log \mathcal{N}(u \mid m_c, s_c^2)`, the side's
 factor is the Laplace approximation
@@ -25,6 +25,7 @@ derivative :math:`-F_{ud} / F_{uu}`, the implicit derivative, so gradients with 
 the depths and the pose are exact for the approximation.
 """
 import math
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -32,12 +33,13 @@ from jax.scipy.special import gammaln
 
 from bbf import mesh as M
 from bbf.ping import render as Rn
-from bbf.ping.theta import Theta
+from bbf.ping.theta import NOISE_REF, Theta
 
 DB_TO_LOG_I = math.log(10) / 10  # gain in dB of amplitude to natural log of intensity
 NEWTON_ITERS = 50
 WARM_ITERS = 8  # damped Newton iterations of a mode warm-started from a nearby one
 MAX_STEP = 1.0  # largest damped Newton step in :math:`u`
+GRID_HALF = 6.0  # half-width of the grid of starts for the mode (`mode`'s `grid`), about the prior mean
 
 
 def bin_ranges(n_bins: int, dr: float):
@@ -55,12 +57,27 @@ def log_gain(r, gain_db):
     return DB_TO_LOG_I * (gain_db[..., 0] + gain_db[..., 1] * r + gain_db[..., 2] * jnp.log10(r))
 
 
-def predicted(S, u, theta: Theta, side: int, dr: float):
-    r"""Predicted mean :math:`\bar I_b` and spike mean :math:`\bar I_{\mathrm{sp},b}` (n_bins,) at :math:`u = \log\kappa`."""
+def background(theta: Theta, side: int, r, offset: Any = 0.0):
+    r"""Background :math:`N_c (r / r_N)^{\nu} e^{\gamma o}` before gain at ranges r, for log transmit power `offset` :math:`o`.
+
+    :math:`\nu` = `Theta.noise_slope` and :math:`\gamma` = `Theta.noise_power`; with both zero (the
+    default) it is the constant :math:`N_c`. offset broadcasts against r.
+    """
+    noise = theta.at(side).noise
+    if theta.noise_slope == 0.0 and theta.noise_power == 0.0:
+        return noise + 0.0 * r
+    return noise * (r / NOISE_REF) ** theta.noise_slope * jnp.exp(theta.noise_power * offset)
+
+
+def predicted(S, u, theta: Theta, side: int, dr: float, offset: Any = 0.0):
+    r"""Predicted mean :math:`\bar I_b` and spike mean :math:`\bar I_{\mathrm{sp},b}` (n_bins,) at :math:`u = \log\kappa`.
+
+    offset: the ping's log transmit power, which only the background law uses (`background`).
+    """
     st = theta.at(side)
     r = bin_ranges(S.shape[-1], dr)
     g = jnp.exp(log_gain(r, st.gain_db))
-    I_bar = g * (jnp.exp(u) * S + st.noise)
+    I_bar = g * (jnp.exp(u) * S + background(theta, side, r, offset))
     return I_bar, I_bar + g * (st.eta + st.zeta * jnp.exp(-r / st.ell))
 
 
@@ -74,8 +91,11 @@ def log_mixture(y, I_bar, I_sp, L: float, eps: float):
     return jnp.logaddexp(math.log1p(-eps) + log_gamma(y, L, I_bar), math.log(eps) + log_gamma(y, 1.0, I_sp))
 
 
-def _objective(theta: Theta, side: int, dr: float, y, S, use, offset=0.0):
+def _objective(theta: Theta, side: int, dr: float, y, S, use, offset=0.0, temper: float = 1.0):
     r""":math:`F(u)` for one side: the bins in `use` plus the Gaussian prior on :math:`u`.
+
+    temper: a factor :math:`\tau \le 1` on the bins' log likelihood, :math:`F = \tau \sum_b \log p(y_b \mid u) + \log p(u)`,
+    for bins that are not independent (`Problem.temper`).
 
     offset: a known shift :math:`o` of the prior mean, :math:`u \sim \mathcal{N}(m + o, s^2)`, e.g.
     the log of the ping's transmit power; equivalent to scaling :math:`S` by :math:`e^{o}`.
@@ -85,22 +105,29 @@ def _objective(theta: Theta, side: int, dr: float, y, S, use, offset=0.0):
     y_safe = jnp.where(ok, y, 1.0)
 
     def F(u):
-        I_bar, I_sp = predicted(S, u, theta, side, dr)
+        I_bar, I_sp = predicted(S, u, theta, side, dr, offset)
         lp = jnp.where(ok, log_mixture(y_safe, I_bar, I_sp, theta.L, st.eps), 0.0)
         z = (u - st.log_kappa_mean - offset) / st.log_kappa_std
-        return lp.sum() - 0.5 * z**2 - math.log(st.log_kappa_std) - 0.5 * math.log(2 * math.pi)
+        return temper * lp.sum() - 0.5 * z**2 - math.log(st.log_kappa_std) - 0.5 * math.log(2 * math.pi)
 
     return F, ok, y_safe
 
 
-def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS, offset=0.0):
+def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS, offset=0.0,
+         temper: float = 1.0, grid: int = 0):
     r"""Mode :math:`\hat u` of :math:`F` and the curvature :math:`H = -F''(\hat u)`, differentiable in S.
 
     u0: a starting value, e.g. the previous evaluation's mode (default: a moment estimate);
     iters: damped Newton iterations, which can be few from a warm start.
+
+    grid: with the spike component :math:`F` often has two maxima, the main component's narrow peak
+    and a broad shoulder where the spikes take most bins, and Newton from u0 stays on the one it starts
+    on. With grid > 0 the start is the best of u0 and that many values spread `GRID_HALF` either side of
+    the prior mean, so the mode returned is the highest one found and does not depend on u0; after the
+    iterations the start is kept if it is still the better (a step on the shoulder can leave the peak).
     """
     st = theta.at(side)
-    F, ok, y_safe = _objective(theta, side, dr, y, S, use, offset)
+    F, ok, y_safe = _objective(theta, side, dr, y, S, use, offset, temper)
     dF = jax.grad(F)
     d2F = jax.grad(dF)
     prior_prec = 1.0 / st.log_kappa_std**2
@@ -108,36 +135,50 @@ def mode(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NE
     # start from the moment estimate :math:`\kappa \approx \sum (y/g - N) / \sum S`
     r = bin_ranges(S.shape[-1], dr)
     g = jnp.exp(log_gain(r, st.gain_db))
-    num = jnp.sum(jnp.where(ok, jnp.maximum(y_safe / g - st.noise, 0.0), 0.0))
+    num = jnp.sum(jnp.where(ok, jnp.maximum(y_safe / g - background(theta, side, r, offset), 0.0), 0.0))
     den = jnp.sum(jnp.where(ok, S, 0.0))
     good = (num > 0) & (den > 0)
     if u0 is None:
         u0 = jnp.where(good, jnp.log(jnp.where(good, num / jnp.where(den > 0, den, 1.0), 1.0)), st.log_kappa_mean + offset)
 
+    u0 = jax.lax.stop_gradient(u0)
+    if grid > 0:
+        cand = jnp.concatenate([st.log_kappa_mean + offset + jnp.linspace(-GRID_HALF, GRID_HALF, grid), u0[None]])
+        u0 = jax.lax.stop_gradient(cand[jnp.argmax(jax.vmap(F)(cand))])
+
     def step(_, u):
         h = jnp.maximum(-d2F(u), prior_prec)  # keep the step uphill where F is not concave
-        return u + jnp.clip(dF(u) / h, -MAX_STEP, MAX_STEP)
+        new = u + jnp.clip(dF(u) / h, -MAX_STEP, MAX_STEP)
+        # with the grid, never leave a better point for a worse one: the peak is narrow, and a step
+        # sized by the shoulder's curvature jumps over it
+        return jnp.where(F(new) >= F(u), new, u + 0.25 * (new - u)) if grid > 0 else new
 
-    u_star = jax.lax.stop_gradient(jax.lax.fori_loop(0, iters, step, jax.lax.stop_gradient(u0)))
+    u_star = jax.lax.stop_gradient(jax.lax.fori_loop(0, iters, step, u0))
+    if grid > 0:
+        u_star = jax.lax.stop_gradient(jnp.where(F(u_star) >= F(u0), u_star, u0))
     # one plain Newton step for the implicit derivative of the mode, with the true curvature
     # (a floor here would bend the derivative); tiny at a converged mode, and limited like the
     # damped steps where F is flat in u (e.g. no echo predicted)
     H_star = jnp.maximum(-d2F(u_star), 1e-12)
     u_hat = u_star + jnp.clip(dF(u_star) / H_star, -MAX_STEP, MAX_STEP)
+    if grid > 0:
+        # where F is not concave at u_star the plain step is a jump of `MAX_STEP` to nowhere: stay
+        u_hat = jnp.where(-d2F(u_star) > prior_prec, u_hat, u_star)
     # the Laplace curvature is floored at the prior's, as in the damped steps: where the spikes
     # make F non-concave, the term then stays bounded instead of rewarding the flat spot
     return u_hat, jnp.maximum(-d2F(u_hat), prior_prec)
 
 
 def laplace_ping_side(theta: Theta, side: int, dr: float, y, S, use, u0=None, iters: int = NEWTON_ITERS,
-                      offset=0.0):
+                      offset=0.0, temper: float = 1.0, grid: int = 0):
     r"""(:math:`\log \int \prod_b p(y_b \mid S, u)\, p(u)\, \mathrm{d}u` by Laplace, :math:`\hat u`) for one side.
 
     u0, iters: as in `mode` (a warm start and few iterations within an optimiser's loop); offset:
-    the known shift of the prior mean of :math:`u` (`_objective`).
+    the known shift of the prior mean of :math:`u`, and temper: the factor on the bins' log likelihood
+    (`_objective`); grid: starts of the mode search (`mode`).
     """
-    F, _, _ = _objective(theta, side, dr, y, S, use, offset)
-    u_hat, H = mode(theta, side, dr, y, S, use, u0=u0, iters=iters, offset=offset)
+    F, _, _ = _objective(theta, side, dr, y, S, use, offset, temper)
+    u_hat, H = mode(theta, side, dr, y, S, use, u0=u0, iters=iters, offset=offset, temper=temper, grid=grid)
     return F(u_hat) + 0.5 * math.log(2 * math.pi) - 0.5 * jnp.log(H), u_hat
 
 

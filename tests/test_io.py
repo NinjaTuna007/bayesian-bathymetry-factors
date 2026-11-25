@@ -68,3 +68,12 @@ def test_retime_uses_regular_stamps():
     np.testing.assert_allclose(poses[:, 0], 1.8 * t_new, atol=1e-9)  # the navigation at the new times
     assert np.all(np.diff(t_new) > 0)
     assert np.abs(poses[:, 5]).max() <= np.pi  # yaw near the wrap stays wrapped
+
+
+def test_shifted_moves_positions_only(tmp_path):
+    write_cache(tmp_path / "c.npz", np.random.default_rng(1))
+    p = load_patch(tmp_path / "c.npz", "A")
+    q = p.shifted(2.5, -1.0)
+    np.testing.assert_allclose(q.poses[:, :2], p.poses[:, :2] + [2.5, -1.0])
+    np.testing.assert_array_equal(q.poses[:, 2:], p.poses[:, 2:])
+    assert q.y is p.y and q.name == p.name and np.shares_memory(p.poses, q.poses) is False

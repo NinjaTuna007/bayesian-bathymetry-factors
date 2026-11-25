@@ -1,0 +1,40 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-af17dc724744bfbb3' is dirty
+[15:22:08] pass B: texture peak +0.20 (9.1 sd; +0.05 unmoved) at (-2.56, +0.10) m east, north: moved
+[15:22:08] 1801 pings in 2 passes; mesh 124184 vertices, z_ref 56.39
+[15:22:08] first echoes found on 97.8% of ping-sides
+[15:22:13] first-echo start: 1801 points, trend [21.378], depth 21.3..21.4 m
+[15:22:13] level k = 27: 142 bins of 35.6 cm, 426 samples per side
+[15:23:17]   GN start: ell = -2078933.1
+[15:24:25]   GN 0: ell = -2063577.8 (+15355.3, predicted +15771.0, ratio 0.97), max |dd| = 0.000 m, lambda = 1.0e+00, xi sd 0.13, 68s
+[15:24:53]   GN 1: ell = -2056628.9 (+6949.0, predicted +6721.4, ratio 1.03), max |dd| = 0.000 m, lambda = 1.4e+00, xi sd 0.20, 28s
+[15:25:19]   GN 2: ell = -2052646.5 (+3982.4, predicted +4059.5, ratio 0.98), max |dd| = 0.000 m, lambda = 1.8e+00, xi sd 0.24, 27s
+[15:25:43]   GN 3: ell = -2048581.9 (+4064.6, predicted +3740.3, ratio 1.09), max |dd| = 0.000 m, lambda = 1.2e+00, xi sd 0.30, 24s
+[15:26:06]   GN 4: ell = -2044702.2 (+3879.7, predicted +3945.7, ratio 0.98), max |dd| = 0.000 m, lambda = 8.1e-01, xi sd 0.36, 23s
+[15:26:29]   GN 5: ell = -2040710.4 (+3991.7, predicted +3523.6, ratio 1.13), max |dd| = 0.000 m, lambda = 5.4e-01, xi sd 0.42, 23s
+[15:26:59]   GN 6: ell = -2037886.3 (+2824.2, predicted +2383.2, ratio 1.19), max |dd| = 0.000 m, lambda = 7.2e-01, xi sd 0.47, 30s
+[15:27:28]   GN 7: ell = -2035956.3 (+1929.9, predicted +1816.1, ratio 1.06), max |dd| = 0.000 m, lambda = 9.6e-01, xi sd 0.50, 29s
+[15:27:51]   GN 8: ell = -2033846.4 (+2109.9, predicted +1781.4, ratio 1.18), max |dd| = 0.000 m, lambda = 6.4e-01, xi sd 0.55, 24s
+[15:28:14]   GN 9: ell = -2031622.0 (+2224.4, predicted +1715.0, ratio 1.30), max |dd| = 0.000 m, lambda = 4.3e-01, xi sd 0.59, 23s
+[15:28:46]   GN 10: ell = -2030589.5 (+1032.6, predicted +1507.4, ratio 0.69), max |dd| = 0.000 m, lambda = 1.1e+00, xi sd 0.61, 31s
+[15:29:05]   GN 11: ell = -2029538.7 (+1050.8, predicted +932.9, ratio 1.13), max |dd| = 0.000 m, lambda = 1.1e+00, xi sd 0.63, 19s
+[15:29:26]   GN 12: ell = -2027817.6 (+1721.1, predicted +1345.8, ratio 1.28), max |dd| = 0.000 m, lambda = 3.8e-01, xi sd 0.67, 21s
+[15:29:50]   GN 13: ell = -2026005.4 (+1812.2, predicted +1343.6, ratio 1.35), max |dd| = 0.000 m, lambda = 2.5e-01, xi sd 0.71, 25s
+[15:30:19]   GN 14: ell = -2024529.6 (+1475.8, predicted +1213.7, ratio 1.22), max |dd| = 0.000 m, lambda = 3.4e-01, xi sd 0.75, 29s
+[15:30:47]   GN 15: ell = -2023356.5 (+1173.1, predicted +876.7, ratio 1.34), max |dd| = 0.000 m, lambda = 4.5e-01, xi sd 0.77, 28s
+[15:31:10]   GN 16: ell = -2022134.6 (+1221.9, predicted +946.6, ratio 1.29), max |dd| = 0.000 m, lambda = 3.0e-01, xi sd 0.80, 23s
+[15:31:35]   GN 17: ell = -2020775.4 (+1359.2, predicted +906.1, ratio 1.50), max |dd| = 0.000 m, lambda = 2.0e-01, xi sd 0.83, 25s
+[15:31:35] round 0: reflectivity at the start depths, sd 0.83
+[15:31:37] round 0: shape L 3.51, spike rates [0.318 0.382]
+[15:31:53] round 0: theta fit (converged True): eta [1.11317488e+12 2.62475902e+13], zeta [3.14557429e+09 3.19190182e+09], ell [1.95946591 1.81563369], log kappa [39.15939844 37.149886  ] ± [0.55298467 1.45066222]
+[15:32:00] round 0: Jacobians in 7s
+[15:32:26]   GN start: ell = -1969424.5
+[15:35:03]   GN 0: ell = -1961197.5 (+8227.0, predicted +8471.5, ratio 0.97), max |dd| = 0.844 m, lambda = 1.0e+00, xi sd 0.85, 157s
+[15:36:30]   GN 1: ell = -1957110.5 (+4087.0, predicted +3828.7, ratio 1.07), max |dd| = 0.591 m, lambda = 1.4e+00, xi sd 0.86, 87s
+[15:38:03]   GN 2: ell = -1954649.8 (+2460.7, predicted +2663.1, ratio 0.92), max |dd| = 0.528 m, lambda = 1.8e+00, xi sd 0.87, 93s
+[15:38:43]   GN 3: ell = -1950838.3 (+3811.5, predicted +3461.4, ratio 1.10), max |dd| = 0.728 m, lambda = 6.1e-01, xi sd 0.89, 41s
+[15:40:22]   GN 4: ell = -1949300.4 (+1538.0, predicted +2072.9, ratio 0.74), max |dd| = 0.610 m, lambda = 1.6e+00, xi sd 0.90, 98s
+[15:41:09]   GN 5: ell = -1947918.0 (+1382.4, predicted +1231.9, ratio 1.12), max |dd| = 0.191 m, lambda = 1.6e+00, xi sd 0.91, 47s
+[15:42:11] Laplace: depth sd median 7.35 m in 62s
+[15:42:11] level k = 27 done: trend [21.326]; beam centre [50. 50.], width [60. 60.] deg; shape 3.51, spike rates [0.318 0.382]
+[15:42:11] wrote runs/t27t.npz; total 21 min
+[15:42:26] wrote map

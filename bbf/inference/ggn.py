@@ -42,7 +42,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from bbf.inference.objective import Problem
-from bbf.ping.factor import DB_TO_LOG_I, bin_ranges, log_gamma, predicted
+from bbf.ping.factor import DB_TO_LOG_I, background, bin_ranges, log_gamma, predicted
 from bbf.ping.shadow import lit_probability
 from bbf.ping.theta import with_psi
 
@@ -60,22 +60,31 @@ def layout(problem: Problem) -> dict:
             "n_psi": n_psi, "size": nf + nb + n_u + n_psi}
 
 
+def _offset(problem: Problem, p: int) -> np.ndarray:
+    """Log transmit power (n,) of the pings of pass p; zeros without `Problem.kappa_offset`."""
+    if problem.kappa_offset is None:
+        return np.zeros(len(problem.poses[p]))
+    return np.asarray(problem.kappa_offset[p], dtype=float)
+
+
 def ping_weights(problem: Problem, S, u_hat, uses):
     r"""Per pass (n, 2, B): Fisher weight of each scored bin and the two derivatives of :math:`\log\bar I`."""
     th, dr = problem.theta, problem.dr
+    r = np.asarray(bin_ranges(problem.n_bins, dr))
     out = []
-    for y, Sp, up, use in zip(problem.y, S, u_hat, uses, strict=True):
+    for p, (y, Sp, up, use) in enumerate(zip(problem.y, S, u_hat, uses, strict=True)):
         W, a, c = np.zeros_like(Sp), np.zeros_like(Sp), np.zeros_like(Sp)
+        off = _offset(problem, p)[:, None]
         for side in (0, 1):
             st = th.at(side)
-            Ib, Isp = (np.asarray(x) for x in predicted(Sp[:, side], up[:, side, None], th, side, dr))
+            Ib, Isp = (np.asarray(x) for x in predicted(Sp[:, side], up[:, side, None], th, side, dr, off))
             ys = np.where(y[:, side] > 0, y[:, side], 1.0)
             lm = math.log1p(-st.eps) + np.asarray(log_gamma(ys, th.L, Ib))
             ls = math.log(st.eps) + np.asarray(log_gamma(ys, 1.0, Isp))
             resp = np.exp(lm - np.logaddexp(lm, ls))  # the main component's responsibility
-            W[:, side] = np.where(use[:, side] & (y[:, side] > 0), th.L * resp, 0.0)
+            W[:, side] = np.where(use[:, side] & (y[:, side] > 0), problem.temper * th.L * resp, 0.0)
             ek = np.exp(up[:, side])[:, None]
-            den = ek * Sp[:, side] + st.noise
+            den = ek * Sp[:, side] + np.asarray(background(th, side, r, off))
             a[:, side] = ek / den
             c[:, side] = ek * Sp[:, side] / den
         out.append((W, a, c))
@@ -95,11 +104,12 @@ def shadow_rows(problem: Problem, S, u_hat):
         coef = np.zeros_like(Sp)
         nb = Sp.shape[-1] // B
         for side in (0, 1):
-            def lit(s, u, side=side):
-                return jax.jvp(lambda ss: lit_probability(ss, u, th, side, problem.dr), (s,), (jnp.ones_like(s),))
-            p, dp = (np.asarray(x) for x in jax.vmap(lit)(jnp.asarray(Sp[:, side]), jnp.asarray(up[:, side])))
+            def lit(s, u, o, side=side):
+                return jax.jvp(lambda ss: lit_probability(ss, u, th, side, problem.dr, o), (s,), (jnp.ones_like(s),))
+            p, dp = (np.asarray(x) for x in jax.vmap(lit)(jnp.asarray(Sp[:, side]), jnp.asarray(up[:, side]),
+                                                          jnp.asarray(_offset(problem, p_i))))
             p = np.clip(p, 1e-12, 1 - 1e-12)  # as in `log_shadow_side`
-            g = dp / ((1 - p) * B)  # per block, per bin of the block
+            g = math.sqrt(problem.temper) * dp / ((1 - p) * B)  # per block, per bin of the block
             g = g * ~np.asarray(problem.labels[p_i][:, side, :nb], dtype=bool)  # dark blocks only
             if problem.valid is not None:
                 g = g * problem.valid[p_i][:, side, :nb]

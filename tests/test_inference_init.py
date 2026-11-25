@@ -88,3 +88,41 @@ def test_start_points_take_the_later_side():
     ps = Pass(name="p", poses=np.array([[1.0, 2.0, -5.0, 0, 0, 0]]), y=np.ones((1, 2, 4)), dr=DR, t=np.zeros(1))
     pts = I.first_echo_points(ps, np.array([[15.0, 12.0]]))
     np.testing.assert_allclose(pts, [[1.0, 2.0, -20.0]])
+
+
+def test_bank_points_make_a_start_that_honours_both_first_echoes():
+    """Over a floor with a bank on starboard, the points lie on the bank and the start's nearest ranges match both echoes."""
+    import jax.numpy as jnp
+
+    from bbf import mesh as M
+    from bbf.ping.first_return import TAU, _batched
+    from bbf.prior import Prior
+    m = M.build(-40.0, 40.0, -15.0, 15.0, h=0.5, origin=(0.0, 0.0), z_ref=0.0)
+    depth, slope = 20.0, np.tan(np.radians(35.0))
+    n = 30
+    # heading north at x = 0: starboard is +x; the bank rises from the point below the sonar
+    poses = np.column_stack([np.zeros(n), np.linspace(-7, 7, n), np.zeros(n), np.zeros((n, 3))])
+    r_bank = depth * np.cos(np.radians(35.0))
+    r0 = np.column_stack([np.full(n, depth), np.full(n, r_bank)])
+    ps = Pass(name="a", poses=poses, y=np.ones((n, 2, 4)), dr=0.1, t=np.arange(n) * 0.1)
+    bank = I.bank_points(ps, r0)
+    assert len(bank) > 5 * n and np.all(bank[:, 0] > 0)
+    np.testing.assert_allclose(bank[:, 2], -depth + slope * bank[:, 0], atol=1e-9)
+    assert bank[:, 0].max() == pytest.approx(r_bank * np.sin(np.radians(35.0)))
+    assert len(I.bank_points(ps, np.column_stack([r0[:, 0], r0[:, 0] - 0.3]))) == 0  # within the gap: no bank
+    up = I.bank_points(ps, r0, top=2.0)  # on up the same plane, to 2 m below the sonar
+    np.testing.assert_allclose(up[:, 2], -depth + slope * up[:, 0], atol=1e-9)
+    assert up[:, 2].max() == pytest.approx(-2.0) and len(up) > len(bank)
+    stray = r0.copy()
+    stray[10] = [12.0, np.nan]  # one ping's detections off: port far too early, starboard missing
+    np.testing.assert_allclose(I.bank_points(ps, stray), bank)
+    prior = Prior(m, 5.0, 8.0, mu_beta=np.array([depth]), Sigma_beta=np.array([[100.0]]), alpha=3)
+    u = jnp.arange(0.025, 25.0, 0.05)
+    res = {}
+    for name, pts in (("level", I.first_echo_points(ps, r0)),
+                      ("bank", np.concatenate([I.first_echo_points(ps, r0), bank]))):
+        d = I.depths_from_points(m, pts, prior)
+        rt = np.stack([np.asarray(_batched(m, c, TAU)(jnp.asarray(d), jnp.asarray(poses), u)[0]) for c in (0, 1)], axis=1)
+        res[name] = np.median((r0 - rt)[5:-5], axis=0)
+    assert abs(res["level"][0]) < 0.3 and res["level"][1] < -3.0  # the level start misses starboard's echo by metres
+    assert np.all(np.abs(res["bank"]) < 0.5)
