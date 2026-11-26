@@ -163,3 +163,69 @@ def test_grad_and_joint_precision(small):
     lhs = pr.log_density(d + dz[:n], beta + dz[n:]) - pr.log_density(d, beta)
     rhs = np.concatenate([gd, gb]) @ dz - 0.5 * dz @ (Q @ dz)
     assert lhs == pytest.approx(rhs, rel=1e-9)
+
+
+def test_slope_factor_is_the_sum_of_squared_face_gradients():
+    m = M.build(0.0, 8.0, 0.0, 7.0, h=0.5)
+    s = 0.2
+    base = P.Prior(m, 3.0, 2.0, mu_beta=np.array([15.0]), Sigma_beta=np.array([[4.0]]))
+    pr = P.Prior(m, 3.0, 2.0, mu_beta=np.array([15.0]), Sigma_beta=np.array([[4.0]]), slope=s)
+    rng = np.random.default_rng(0)
+    d, beta = 15.0 + rng.standard_normal(m.n_vertices), np.array([15.0])
+    g = np.asarray(M.face_gradient(m, d))
+    assert pr.log_density(d, beta) - base.log_density(d, beta) == pytest.approx(-0.5 * np.sum(g**2) / s**2, rel=1e-9)
+
+
+def test_slope_factor_limits_the_tilt_of_prior_draws():
+    m = M.build(0.0, 30.0, 0.0, 30.0, h=1.0)
+    tilt = {}
+    for s in (None, 0.2):
+        pr = P.Prior(m, 5.0, 8.0, mu_beta=np.array([15.0]), Sigma_beta=np.array([[4.0]]), slope=s)
+        d, _ = P.sample(pr, rng=1)
+        tilt[s] = np.sqrt(np.mean(np.asarray(M.face_gradient(m, d)) ** 2))
+    assert tilt[None] > 1.0  # the Matérn part alone: slopes of order one at the mesh scale
+    assert tilt[0.2] < 0.2
+
+
+def _student(nu=1.0, s=0.2):
+    m = M.build(0.0, 8.0, 0.0, 7.0, h=0.5)
+    pr = P.Prior(m, 3.0, 2.0, mu_beta=np.array([15.0]), Sigma_beta=np.array([[4.0]]), slope=s, slope_nu=nu)
+    d = 15.0 + np.random.default_rng(3).standard_normal(m.n_vertices)
+    return m, pr, d, np.array([15.2])
+
+
+def test_student_slope_density_and_gradient():
+    m, pr, d, beta = _student()
+    g = np.asarray(M.face_gradient(m, d))
+    base = P.Prior(m, 3.0, 2.0, mu_beta=np.array([15.0]), Sigma_beta=np.array([[4.0]]))
+    want = -1.5 * np.sum(np.log1p(np.sum(g**2, axis=1) / (3 * 0.04)))
+    assert pr.log_density(d, beta) - base.log_density(d, beta) == pytest.approx(want, rel=1e-9)
+    gd, gb = pr.grad(d, beta)
+    e = np.zeros_like(d)
+    for i in (0, 17, 101):
+        e[:] = 0.0
+        e[i] = 1e-6
+        fd = (pr.log_density(d + e, beta) - pr.log_density(d - e, beta)) / 2e-6
+        assert gd[i] == pytest.approx(fd, rel=1e-5, abs=1e-6)
+    fb = (pr.log_density(d, beta + 1e-6) - pr.log_density(d, beta - 1e-6)) / 2e-6
+    assert gb[0] == pytest.approx(fb, rel=1e-5)
+
+
+def test_student_slope_reweighted_curvature():
+    m, pr, d, beta = _student()
+    # reweighted at the point, its precision gives the exact gradient there
+    np.testing.assert_allclose(pr.at(d, beta).Lambda @ (d - pr.X @ beta), -pr.grad(d, beta)[0], rtol=1e-9, atol=1e-9)
+    # at a level seabed it is the Gaussian factor's, so the start does not change
+    gauss = P.Prior(m, 3.0, 2.0, mu_beta=np.array([15.0]), Sigma_beta=np.array([[4.0]]), slope=0.2)
+    np.testing.assert_allclose(pr.Lambda.toarray(), gauss.Lambda.toarray(), rtol=1e-9, atol=1e-9)
+
+
+def test_student_slope_makes_a_bank_cheaper():
+    m = M.build(0.0, 20.0, 0.0, 10.0, h=1.0)
+    x = m.vertices[:, 0]
+    bank = np.clip(x - 8.0, 0.0, 8.0) * np.tan(np.radians(40.0))  # rises 6.7 m over 8 m
+    cost = {}
+    for nu in (None, 1.0):
+        pr = P.Prior(m, 5.0, 8.0, mu_beta=np.array([0.0]), Sigma_beta=np.array([[4.0]]), slope=0.2, slope_nu=nu)
+        cost[nu] = pr.log_density(np.zeros(m.n_vertices), np.zeros(1)) - pr.log_density(bank, np.zeros(1))
+    assert cost[1.0] < 0.5 * cost[None]

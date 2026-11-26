@@ -1,0 +1,324 @@
+import dataclasses
+
+import jax.numpy as jnp
+import numpy as np
+import pytest
+import scipy.sparse as sp
+
+from bbf import match as Mt
+from bbf import mesh as M
+from bbf import ping as P
+from bbf import prior as PR
+from bbf.inference import objective as O
+from bbf.match.ratio import (
+    RatioAssignment,
+    RatioMatch,
+    assign,
+    fisher_rows,
+    log_ratio_match,
+)
+
+
+def _two_cells():
+    """Two cells: cell 0 seen by visits 0, 1, 2 (pass 0 twice, pass 1); cell 1 by visits 3, 4."""
+    unit = [np.array([[[0, 0, 3, -1]], [[1, 1, 4, -1]]]), np.array([[[2, 2, -1, -1]]])]
+    Y = np.array([3.0, 5.0, 2.0, 7.0, 1.5])
+    return RatioAssignment(unit=unit, unit_cell=np.array([0, 0, 0, 1, 1]), n_cells=2, Y=Y, L=1.3)
+
+
+def test_reflectivity_cancels_within_a_cell():
+    a = _two_cells()
+    rng = np.random.default_rng(0)
+    Ib = [rng.uniform(0.5, 2.0, size=u.shape) for u in a.unit]
+    base = float(log_ratio_match([jnp.asarray(x) for x in Ib], a))
+    # scale every bin of cell 0 (visits 0, 1, 2) by one factor, cell 1 by another
+    scaled = []
+    for x, u in zip(Ib, a.unit):
+        f = np.where(np.isin(u, [0, 1, 2]), 7.0, np.where(np.isin(u, [3, 4]), 0.2, 1.0))
+        scaled.append(jnp.asarray(x * f))
+    assert float(log_ratio_match(scaled, a)) == pytest.approx(base, rel=1e-12)
+    # changing one visit against the others does change it
+    other = [jnp.asarray(np.where(u == 1, x * 3.0, x)) for x, u in zip(Ib, a.unit)]
+    assert abs(float(log_ratio_match(other, a)) - base) > 1e-3
+
+
+def test_two_visits_is_the_log_ratio_density_up_to_the_data():
+    """For one cell with two visits the term moves with the predicted ratio exactly as log p(e | k_a, k_b)."""
+    a = RatioAssignment(unit=[np.array([[[0, 0, 1]]])], unit_cell=np.array([0, 0]), n_cells=1,
+                        Y=np.array([2.0, 5.0]), L=0.9)
+    vals, refs = [], []
+    for ratio in (0.3, 1.0, 2.5, 9.0):
+        Ib = np.array([[[1.0, 1.0, ratio]]])
+        vals.append(float(log_ratio_match([jnp.asarray(Ib)], a)))
+        ka, kb = 0.9 * 2.0**2 / 2.0, 0.9  # shapes of the two sums: two equal bins, one bin
+        e = np.log(5.0 / ratio) - np.log(2.0 / 2.0)
+        refs.append(float(Mt.log_ratio_pdf(e, ka, kb)))
+    np.testing.assert_allclose(np.diff(vals), np.diff(refs), rtol=1e-10)
+
+
+def test_assign_splits_visits_by_pass_and_gap():
+    """One cell: pass 0 at t = 0, 1 and again at 20 s (a second visit), pass 1 once; a second cell seen once."""
+    n, B = 4, 3
+    q0 = np.full((n, 2, B, 2), np.nan)
+    q0[[0, 1, 3], 1, 0] = [0.5, 0.5]  # cell (0, 0) at pings 0, 1 and 3
+    q0[2, 1, 1] = [5.5, 5.5]  # cell (5, 5), only here
+    q1 = np.full((2, 2, B, 2), np.nan)
+    q1[0, 0, 2] = [0.2, 0.7]  # cell (0, 0) from pass 1
+    t0, t1 = np.array([0.0, 1.0, 2.0, 20.0]), np.array([100.0, 101.0])
+    y0, y1 = np.ones((n, 2, B)), np.full((2, 2, B), 2.0)
+    use0, use1 = np.ones((n, 2, B), bool), np.ones((2, 2, B), bool)
+    a = assign([q0, q1], [t0, t1], [y0, y1], [use0, use1], 1.0, RatioMatch(cell=1.0, gap=5.0))
+    assert a.n_cells == 1 and a.n_units == 3  # the lone cell is not matched
+    u0 = a.unit[0]
+    assert u0[0, 1, 0] == u0[1, 1, 0] != u0[3, 1, 0]  # 20 s later: a second visit
+    assert u0[2, 1, 1] == -1 and a.unit[1][0, 0, 2] >= 0
+    np.testing.assert_allclose(np.sort(a.Y), [1.0, 2.0, 2.0])
+    assert sum(int(m.sum()) for m in a.matched()) == 4
+
+
+def test_fisher_rows_give_the_cell_fisher_information():
+    """G^T (A^T A - B^T B) G equals sum over cells of J^T (diag k - k k^T / K) J in eta = log I."""
+    a = _two_cells()
+    rng = np.random.default_rng(1)
+    Ib = [rng.uniform(0.5, 2.0, size=u.shape) for u in a.unit]
+    dI = [rng.uniform(0.1, 1.0, size=u.shape) for u in a.unit]
+    A, B = fisher_rows(Ib, a)
+    D = sp.diags(np.concatenate([x.ravel() for x in dI]))
+    H = ((A @ D).T @ (A @ D) - (B @ D).T @ (B @ D)).toarray()
+    unit = np.concatenate([u.ravel() for u in a.unit])
+    I, d = np.concatenate([x.ravel() for x in Ib]), np.concatenate([x.ravel() for x in dI])
+    on = unit >= 0
+    s1, s2 = np.bincount(unit[on], I[on], 5), np.bincount(unit[on], I[on] ** 2, 5)
+    k = a.L * s1**2 / s2
+    Jeta = np.zeros((5, len(unit)))
+    Jeta[unit[on], np.flatnonzero(on)] = d[on] / s1[unit[on]]
+    expect = np.zeros_like(H)
+    for c, vis in ((0, [0, 1, 2]), (1, [3, 4])):
+        kk = k[vis]
+        F = np.diag(kk) - np.outer(kk, kk) / kk.sum()
+        expect += Jeta[vis].T @ F @ Jeta[vis]
+    np.testing.assert_allclose(H, expect, atol=1e-12)
+    assert np.linalg.eigvalsh(H).min() > -1e-10
+
+
+DEPTH, SONAR_Z, N_BINS, DR = 20.0, -5.0, 300, 0.1
+
+
+@pytest.fixture(scope="module")
+def problem():
+    """Two passes over a ridge, with a reflectivity that varies over the ground, and the ratio match."""
+    m = M.build(-40.0, 40.0, -10.0, 10.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = DEPTH - 2.0 * np.exp(-((v[:, 0] - 6.0) ** 2) / (2 * 2.0**2))
+    xi_true = 0.5 * np.sin(v[:, 0] / 3.0)
+    th = P.Theta(noise=1e-7, L=5.0, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.3)
+    u = P.u_grid(N_BINS, DR, du=0.05)
+    rng = np.random.default_rng(2)
+    poses, ys, labels, times = [], [], [], []
+    for x0 in (-5.0, 9.0):
+        pp = np.column_stack([np.full(5, x0), np.linspace(-2, 2, 5), np.full(5, SONAR_Z), np.zeros((5, 3))])
+        S = np.asarray(P.unit_intensities(m, jnp.asarray(d_true), pp, th, u, N_BINS, DR, jnp.asarray(xi_true)))
+        y = rng.gamma(th.L, (S + 1e-7) / th.L)
+        poses.append(pp)
+        ys.append(y)
+        times.append(np.arange(5) * 0.1 + 100 * len(times))
+        labels.append(np.stack([[P.block_labels(y[t, c], th, c, DR) for c in (0, 1)] for t in range(5)]))
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=np.array([0.0, 0.0, DEPTH]), Sigma_beta=np.diag([0.01, 0.01, 25.0]))
+    pb = O.Problem(mesh=m, prior=prior, theta=th, poses=poses, y=ys, labels=labels, u=u, dr=DR, chunk=5)
+    d0 = d_true + 0.3 * np.sin(v[:, 1] / 3.0)
+    fp = [Mt.footprints(m, jnp.asarray(d0), pp, th, u, N_BINS, DR) for pp in poses]
+    ra = assign(fp, times, ys, pb.uses_all(), th.L, RatioMatch(cell=1.0))
+    return dataclasses.replace(pb, ratio=ra), d0, np.array([0.0, 0.0, DEPTH])
+
+
+def test_matched_bins_leave_the_ping_factor(problem):
+    pb, _, _ = problem
+    assert pb.ratio is not None and pb.ratio.n_cells > 20
+    for u, ua, mt in zip(pb.uses(), pb.uses_all(), pb.ratio.matched()):
+        assert not (u & mt).any() and np.array_equal(u | (ua & mt), ua)
+
+
+def test_value_gradient_and_ggn_with_the_ratio_match(problem):
+    from bbf.inference import ggn
+    from bbf.inference.loop import jacobians
+    pb, d0, beta = problem
+    val, (gd, _), det = O.value_and_grad(pb, d0, beta)
+    assert O.value(pb, d0, beta) == pytest.approx(val, rel=1e-10)
+    rng = np.random.default_rng(3)
+    for _ in range(2):
+        e = rng.standard_normal(pb.mesh.n_vertices) * (np.abs(pb.mesh.vertices[:, 0]) < 20)
+        h = 1e-5
+        fd = (O.value(pb, d0 + h * e, beta) - O.value(pb, d0 - h * e, beta)) / (2 * h)
+        assert gd @ e == pytest.approx(fd, rel=1e-4)
+    J = jacobians(pb, d0)
+    H1 = ggn.assemble(pb, J, det["S"], det["u"], u_ratio=det["u_ratio"])
+    H0 = ggn.assemble(dataclasses.replace(pb, ratio=None), J, det["S"], det["u"])
+    n = pb.mesh.n_vertices
+    with pytest.raises(ValueError):
+        ggn.assemble(pb, J, det["S"], det["u"])
+    assert abs(sp.csr_matrix(H1 - H1.T)).max() < 1e-9 * abs(H1).max()
+    assert abs(sp.csr_matrix(H1 - H0)[:n, :n]).sum() > 0
+
+
+def test_held_gains_give_a_consistent_gradient_and_curvature(problem):
+    """With the gains held (`ratio_gains`), the gradient matches finite differences of the same objective."""
+    from bbf.inference import ggn
+    from bbf.inference.loop import jacobians
+    pb, d0, beta = problem
+    held = dataclasses.replace(pb, ratio_gain=O.ratio_gains(pb, O.render(pb, d0)))
+    _, (gd, _), det = O.value_and_grad(held, d0, beta)
+    for p, g in enumerate(held.ratio_gain):
+        np.testing.assert_allclose(det["u_ratio"][p], g)  # the gains are the held ones
+    rng = np.random.default_rng(4)
+    for _ in range(2):
+        e = rng.standard_normal(pb.mesh.n_vertices) * (np.abs(pb.mesh.vertices[:, 0]) < 20)
+        h = 1e-5
+        fd = (O.value(held, d0 + h * e, beta) - O.value(held, d0 - h * e, beta)) / (2 * h)
+        assert gd @ e == pytest.approx(fd, rel=1e-4)
+    H = ggn.assemble(held, jacobians(held, d0), det["S"], det["u"], u_ratio=det["u_ratio"])
+    assert abs(sp.csr_matrix(H - H.T)).max() < 1e-9 * abs(H).max()
+
+
+def _two_visits(mismatch, spread, L=13.0, nb=20, model_sd=0.0, hold=True):
+    """One cell, two visits of nb bins predicted equal in total; the second measured brighter by exp(mismatch)."""
+    from bbf.match.ratio import visit_shapes
+    unit = np.concatenate([np.zeros(nb, int), np.ones(nb, int)]).reshape(1, 2, nb)
+    a = RatioAssignment([unit], np.array([0, 0]), 1, np.array([nb * 1.0, nb * np.exp(mismatch)]), L)
+    flat = np.ones((1, 2, nb))
+    prof = np.exp(np.linspace(0, spread, nb))
+    Ib = np.stack([prof / prof.mean()] * 2).reshape(1, 2, nb)
+    if hold:
+        a = dataclasses.replace(a, shape=visit_shapes([flat], a, model_sd))
+    return float(log_ratio_match([jnp.asarray(Ib)], a))
+
+
+def test_held_shapes_do_not_reward_uneven_predictions():
+    # followed, the shapes fall with the spread and forgive the mismatch; held, the spread changes nothing
+    assert _two_visits(1.0, 10.0, hold=False) > _two_visits(1.0, 0.0, hold=False) + 40
+    assert _two_visits(1.0, 10.0) == pytest.approx(_two_visits(1.0, 0.0), abs=1e-9)
+
+
+def test_model_error_caps_the_shape_and_the_cost_of_a_mismatch():
+    from bbf.match.ratio import visit_shapes
+    unit = np.zeros((1, 1, 50), int)
+    a = RatioAssignment([unit], np.array([0]), 1, np.array([50.0]), 13.0)
+    k = visit_shapes([np.ones((1, 1, 50))], a, model_sd=0.5)
+    assert k[0] == pytest.approx(650 / (1 + 650 * 0.25)) and k[0] < 4.0
+    cost = lambda s: _two_visits(0.0, 0.0, model_sd=s) - _two_visits(1.0, 0.0, model_sd=s)
+    assert cost(0.0) > 50  # speckle alone: a factor of e between two visits is far out
+    assert 0.5 < cost(0.5) < 2.0  # with the model error it is about one standard deviation of the difference (sqrt 2 x 0.5)
+
+
+# --- the ratio match in this objective: background law, transmit power, temper; the solver and the loop
+
+def _target_problem(problem, temper=0.5):
+    """The fixture's problem with the background law in range and transmit power, per-ping powers, temper, and held gains and shapes."""
+    from bbf.inference.loop import with_ratio
+    pb, d0, beta = problem
+    th = dataclasses.replace(pb.theta, noise=1e-3, noise_slope=1.5, noise_power=0.8)  # a background the bins see
+    offsets = [np.linspace(-0.3, 0.2, len(p)) for p in pb.poses]
+    base = dataclasses.replace(pb, theta=th, kappa_offset=offsets, temper=temper, ratio=None)
+    times = [np.arange(len(p)) * 0.1 + 100 * i for i, p in enumerate(pb.poses)]
+    return with_ratio(base, d0, times, RatioMatch(cell=1.0, model_sd=0.3), log=lambda _: None), d0, beta
+
+
+def test_gradient_with_the_ratio_match_matches_finite_differences_per_vertex(problem):
+    """d ell / d d_i of the full objective, at single vertices the matched cells see, against central differences."""
+    pb, d0, beta = _target_problem(problem)
+    assert pb.ratio is not None and pb.ratio.shape is not None and pb.ratio_gain is not None
+    assert pb.ratio.n_cells > 20
+    # the ratio term is in the value, tempered: without it the value changes
+    v_ratio = O.value(pb, d0, beta)
+    v_plain = O.value(dataclasses.replace(pb, ratio=None, ratio_gain=None), d0, beta)
+    assert abs(v_ratio - v_plain) > 1.0
+    _, (gd, _), det = O.value_and_grad(pb, d0, beta)
+    for p, g in enumerate(pb.ratio_gain):
+        np.testing.assert_array_equal(det["u_ratio"][p], g)
+    # vertices with the largest data gradient: where the bins are
+    data = np.abs(det["grad_d_data"])
+    for i in np.argsort(data)[-4:]:
+        e = np.zeros(pb.mesh.n_vertices)
+        e[i] = 1.0
+        h = 1e-5
+        fd = (O.value(pb, d0 + h * e, beta) - O.value(pb, d0 - h * e, beta)) / (2 * h)
+        assert gd[i] == pytest.approx(fd, rel=1e-4, abs=1e-6 * data.max())
+
+
+def _without_ratio_term(pb):
+    """pb with the matched bins still out of the ping factor but no ratio term: an assignment with no visits to score."""
+    ra = dataclasses.replace(pb.ratio, unit_cell=np.zeros(0, int), n_cells=0, Y=np.zeros(0), shape=np.zeros(0))
+    return dataclasses.replace(pb, ratio=ra)
+
+
+def test_the_ratio_term_is_tempered(problem):
+    """The ratio term's share of the value is temper times the untempered one."""
+    pb1, d0, beta = _target_problem(problem, temper=1.0)
+    pbh = dataclasses.replace(pb1, temper=0.5)
+    share = [O.value(pb, d0, beta) - O.value(_without_ratio_term(pb), d0, beta) for pb in (pb1, pbh)]
+    assert abs(share[0]) > 1.0
+    assert share[1] == pytest.approx(0.5 * share[0], rel=1e-9)
+
+
+def test_ggn_with_the_ratio_rows_is_positive_definite(problem):
+    """The undamped GGN with the ratio rows factorises; the ratio rows alone are symmetric positive semidefinite."""
+    from sksparse.cholmod import cho_factor
+
+    from bbf.inference import ggn
+    from bbf.inference.loop import jacobians
+    pb, d0, beta = _target_problem(problem)
+    _, _, det = O.value_and_grad(pb, d0, beta)
+    J = jacobians(pb, d0)
+    H = ggn.assemble(pb, J, det["S"], det["u"], fr=det["first_return"], hz=det["horizon"], u_ratio=det["u_ratio"])
+    assert abs(sp.csr_matrix(H - H.T)).max() < 1e-9 * abs(H).max()
+    cho_factor(sp.csc_matrix(H))  # raises if not positive definite
+    # the ratio rows: the difference to the same problem without the ratio term (same ping-factor bins)
+    H0 = ggn.assemble(_without_ratio_term(pb), J, det["S"], det["u"], fr=det["first_return"], hz=det["horizon"],
+                      u_ratio=det["u_ratio"])
+    Hr = sp.csr_matrix(H - H0)
+    n = pb.mesh.n_vertices
+    assert abs(Hr[n:, :]).sum() < 1e-9 * abs(Hr).sum()  # no entries outside the depths (gains held, psi fixed)
+    ev = np.linalg.eigvalsh(Hr[:n, :n].toarray())
+    assert ev.max() > 0 and ev.min() > -1e-8 * ev.max()
+
+
+@pytest.mark.slow
+def test_infer_with_the_ratio_match_ascends_as_predicted():
+    """A short outer loop with the ratio match on two passes over a bump with patchy reflectivity: every accepted
+    step ascends, and the gain the quadratic model predicts is of the order of the actual gain."""
+    from bbf.inference.loop import infer
+    from bbf.io import Pass
+    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = np.asarray(20.0 - 2.0 * np.exp(-((v[:, 0] - 2) ** 2 + v[:, 1] ** 2) / (2 * 4.0**2)))
+    xi_true = jnp.asarray(0.5 * np.sin(v[:, 0] / 3.0 + 1.0) * np.cos(v[:, 1] / 5.0))
+    th = P.Theta(noise=1e-7, L=5.0, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5)
+    n_bins, dr = 400, 0.1
+    u = P.u_grid(n_bins, dr, du=0.05)
+    rng = np.random.default_rng(5)
+    passes = []
+    for i, x0 in enumerate((-6.0, 6.0)):
+        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, -5.0), np.zeros((9, 3))])
+        S = np.asarray(P.unit_intensities(m, jnp.asarray(d_true), poses, th, u, n_bins, dr, xi_true))
+        y = rng.gamma(th.L, (S + 1e-7) / th.L)
+        passes.append(Pass(name=f"x{x0}", poses=poses, y=y, dr=dr, t=np.arange(9) * 0.1 + 100.0 * i))
+    beta = np.array([0.0, 0.0, 20.0])
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=beta, Sigma_beta=np.diag([0.01, 0.01, 4.0]))
+    lines = []
+    with pytest.raises(ValueError):
+        infer(passes, m, prior, th, np.full(m.n_vertices, 20.0), beta, u, rounds=1, inner=1, calib_every=3, chunk=9,
+              refl=Mt.Reflectivity(m, 4.0, 0.7), ratio=RatioMatch(), log=lambda _: None)
+    out = infer(passes, m, prior, th, np.full(m.n_vertices, 20.0), beta, u, rounds=2, inner=4, calib_every=3, chunk=9,
+                ratio=RatioMatch(cell=1.0, model_sd=0.3), log=lines.append)
+    assert sum("ratio match:" in s for s in lines) == 2 and sum("shapes held" in s for s in lines) == 2
+    pb = out["problem"]
+    assert pb.ratio is not None and pb.ratio.n_cells > 20 and pb.ratio.shape is not None and pb.ratio_gain is not None
+    steps = [h for r in out["history"] for h in r["gn"] if "rho" in h]
+    assert len(steps) >= 2
+    for r in out["history"]:
+        assert np.all(np.diff([h["ell"] for h in r["gn"]]) > 0)
+    # the model's gain is of the order of the actual: on this problem the ratios were 0.06 to 1.3, median 0.85 (the
+    # 0.06 at round 0's second step, where the plain problem has 0.20: the likelihood is rough at bin scale);
+    # never far above one, which would be curvature the objective does not have
+    rho = np.array([h["rho"] for h in steps])
+    assert np.all((rho > 0.02) & (rho < 3.0)), rho
+    assert 0.5 < np.median(rho) < 2.0, rho

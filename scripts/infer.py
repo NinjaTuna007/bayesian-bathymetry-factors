@@ -3,6 +3,7 @@ r"""Bathymetry from side-scan sonar: inference on patches of the prototype's cac
 
 Usage: python scripts/infer.py PATCHES.npz [--patches-used A B] [--out runs/<name>.npz] [--hold-out N]
        [--levels K:ROUNDS:STEPS ...] [--temper TAU] [--free-beam] [--no-align] [--bank-start [--bank-top M]]
+       [--match {field,ratio} [--cell M] [--model-sd S]]
 
 1. The later passes are moved horizontally onto the first's texture (`bbf.match.align_passes`:
    the navigation of passes minutes apart disagrees by metres, more than the reflectivity field's
@@ -34,6 +35,12 @@ Usage: python scripts/infer.py PATCHES.npz [--patches-used A B] [--out runs/<nam
    grid of starts and the shadow factor is differentiated through it, so the value does not
    depend on the last evaluation and the gradient is the value's.
 
+With `--match ratio` the passes are matched by the ratio match instead (`bbf.match.ratio`): for
+ground cells of `--cell` m seen in several visits, only the ratio of measured to predicted intensity
+between the visits is scored, with the cell's reflectivity integrated out, so a reflectivity can
+explain only what the passes agree on; `--model-sd` is the model error on a visit's log prediction,
+which caps each visit's shape. There is no field then, and :math:`\xi = 0`.
+
 Every saved state holds the level's sonar parameters (`scripts/theta_io.py`), the moves given to
 the passes and the Gauss--Newton history (gain, predicted gain and their ratio per step), for
 `scripts/compare_runs.py`. `--hold-out N` leaves every N-th ping out of the fit, to score.
@@ -56,16 +63,17 @@ from bbf import prior as PR
 from bbf.inference import init as I
 from bbf.inference.loop import infer
 from bbf.inference.multiscale import coarsen_pass, coarsen_theta
-from bbf.io import load_patch, save_depths
-from bbf.match import Reflectivity, align_passes
+from bbf.io import Pass, load_patch, save_depths
+from bbf.match import RatioMatch, Reflectivity, align_passes
 from bbf.ping import Theta, psi_of, u_grid
 from bbf.ping.first_return import FirstReturn
 
 jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platforms", "cpu")  # float64 is faster on this CPU than on the Turing GPU
 
 H_MESH, BUFFER = 0.5, 10.0
 RHO, SIGMA, ALPHA = 5.0, 8.0, 3
+SLOPE = 0.2  # prior sd of each face's depth gradient (`bbf.prior.Prior.slope`)
+KAPPA_STD = 0.2  # sd of a ping-side's log gain about its side's mean: the measured ping-to-ping jitter
 SIGMA_BETA = np.array([[100.0]])  # the constant mean: sd 10 m about the median first-echo depth
 LEVELS = [(27, 1, 6), (9, 1, 6), (3, 2, 6)]  # (bins averaged, rounds, Gauss-Newton steps)
 RHO_XI, SIGMA_XI = 2.0, 1.0  # range (m) and sd of the log-reflectivity field
@@ -77,6 +85,16 @@ PSI_FREE_BEAM = np.array([[False, False, True]] * 2)  # held with --free-beam: t
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def load_passes(path, names):
+    """The passes of a file: patches of the prototype cache by name, or the passes written by legs.py (all of them)."""
+    z = np.load(path)
+    if "0/poses" not in z.files:
+        return [load_patch(path, n) for n in names]
+    n = len({k.split("/", 1)[0] for k in z.files})
+    return [Pass(name=str(z[f"{i}/name"]), poses=z[f"{i}/poses"], y=z[f"{i}/y"].astype(float), dr=float(z[f"{i}/dr"]),
+                 t=z[f"{i}/t"], power=z[f"{i}/power"] if f"{i}/power" in z.files else None) for i in range(n)]
 
 
 def kept(ps, hold_out: int):
@@ -109,15 +127,39 @@ def main():
                     help="continue each bank of the start up to M metres below the sonar (default: to where it touches the first echo)")
     ap.add_argument("--free-beam", action="store_true", help="fit the beam centre and width per side (default: held)")
     ap.add_argument("--no-align", action="store_true", help="leave the later passes where the navigation has them")
+    ap.add_argument("--h", type=float, default=H_MESH, help="mesh spacing (m)")
+    ap.add_argument("--alpha", type=int, default=ALPHA, choices=(2, 3), help="SPDE order of the depth prior")
+    ap.add_argument("--slope", type=float, default=SLOPE, help="prior sd of each face's depth gradient; 0: no slope factor")
+    ap.add_argument("--slope-nu", type=float, help="degrees of freedom of a Student-t slope factor (heavy tails: banks); "
+                                                    "default: Gaussian")
+    ap.add_argument("--kappa-std", type=float, default=KAPPA_STD, help="sd of a ping-side's log gain about its side's mean; 0: fitted")
+    ap.add_argument("--sigma-xi", type=float, default=SIGMA_XI, help="prior sd of the log-reflectivity field")
+    ap.add_argument("--beam-response", type=Path, metavar="FILE.npz",
+                    help="each side's measured correction to the Gaussian beam in beam angle (scripts/beam_response.py), held")
+    ap.add_argument("--match", choices=("field", "ratio"), default="field",
+                    help="how the passes are matched: a shared log-reflectivity field, or the ratio of measured to "
+                         "predicted intensity on shared ground cells (bbf.match.ratio)")
+    ap.add_argument("--cell", type=float, default=1.0, help="ratio match: side of a ground cell (m)")
+    ap.add_argument("--model-sd", type=float, default=0.0,
+                    help="ratio match: sd of the model error on a visit's log prediction (0: speckle alone)")
+    ap.add_argument("--cpu", action="store_true", help="run JAX on the CPU (default: the GPU when there is one)")
     args = ap.parse_args()
+    if args.cpu:
+        jax.config.update("jax_platforms", "cpu")
+    chunk = 32 if jax.default_backend() == "cpu" else 256
+    log(f"JAX on {jax.default_backend()}, {chunk} pings per batch")
     t_start = time.time()
 
     levels = LEVELS if args.levels is None else [tuple(int(v) for v in lv.split(":")) for lv in args.levels]
-    passes = [kept(load_patch(args.patches, n), args.hold_out) for n in args.names]
+    passes = [kept(p, args.hold_out) for p in load_passes(args.patches, args.names)]
     raw, moves = list(passes), np.zeros((len(passes), 2))
     theta = Theta(noise=TVG.NOISE, L=L_SHAPE, eps=EPS, eta=10 * TVG.NOISE, zeta=100 * TVG.NOISE, ell=2.0,
                   log_kappa_mean=TVG.LOG_KAPPA_MEAN, log_kappa_std=2.0, gain_db=TVG.GAIN_DB,
                   noise_slope=TVG.NOISE_SLOPE, noise_power=TVG.NOISE_POWER)
+    if args.beam_response is not None:
+        br = np.load(args.beam_response)
+        theta = dataclasses.replace(theta, beam_knots=br["beam_knots"], beam_log=br["beam_log"])
+        log(f"beam response from {args.beam_response}: {len(br['beam_knots'])} knots, range {np.ptp(br['beam_log'], axis=1).round(2)} log units")
     # first echoes, and with them the horizontal offset of each later pass against the first
     r0 = [I.first_echo(p, theta) for p in passes]
     z_seabed = float(np.median(np.concatenate([I.first_echo_points(p, r) for p, r in zip(passes, r0)])[:, 2]))
@@ -130,12 +172,13 @@ def main():
                 log(f"pass {p.name}: texture peak {off.corr:+.2f} ({off.z:.1f} sd; {off.corr_zero:+.2f} unmoved) at "
                     f"({off.move[0]:+.2f}, {off.move[1]:+.2f}) m east, north: {'moved' if off.z >= 5.0 else 'left'}")
         moves = np.array([p.poses[0, :2] - q.poses[0, :2] for p, q in zip(passes, raw)])
-    mesh = I.mesh_for_passes(passes, h=H_MESH, buffer=BUFFER)
+    mesh = I.mesh_for_passes(passes, h=args.h, buffer=BUFFER)
     log(f"{sum(p.n_pings for p in passes)} pings in {len(passes)} passes; mesh {mesh.n_vertices} vertices, "
         f"z_ref {mesh.z_ref:.2f}")
 
     def prior_of(beta):
-        return PR.Prior(mesh, RHO, SIGMA, mu_beta=beta, Sigma_beta=SIGMA_BETA, alpha=ALPHA)
+        return PR.Prior(mesh, RHO, SIGMA, mu_beta=beta, Sigma_beta=SIGMA_BETA, alpha=args.alpha, slope=args.slope or None,
+                        slope_nu=args.slope_nu)
 
     # start: first echoes under the tracks, the GMRF conditional mean elsewhere
     pts = np.concatenate([I.first_echo_points(p, r) for p, r in zip(passes, r0)])
@@ -155,8 +198,10 @@ def main():
 
     # coarse to fine
     out, xi, shape, eps = None, None, None, None
-    refl = Reflectivity(mesh, RHO_XI, SIGMA_XI)
-    state = {"moves": moves, "hold_out": args.hold_out}
+    refl = Reflectivity(mesh, RHO_XI, args.sigma_xi) if args.match == "field" else None
+    ratio = RatioMatch(cell=args.cell, model_sd=args.model_sd) if args.match == "ratio" else None
+    log(f"match: {args.match}" + (f" ({args.cell} m cells, model error sd {args.model_sd})" if ratio else ""))
+    state = {"moves": moves, "hold_out": args.hold_out, "match": args.match, "cell": args.cell, "model_sd": args.model_sd}
     for li, (k, rounds, inner) in enumerate(levels):
         cp = [coarsen_pass(p, k) for p in passes]
         th = coarsen_theta(theta, k, looks=shape)  # the first level starts from independent bins
@@ -168,8 +213,9 @@ def main():
         if li == len(levels) - 1:
             extra["laplace_samples"] = 100
         out = infer(cp, mesh, prior_of(beta), th, d, beta, u, rounds=rounds, inner=inner, calib_every=50,
-                    chunk=32, psi_prior=psi_prior, psi_held=psi_held, refl=refl, xi0=xi,
+                    chunk=chunk, psi_prior=psi_prior, psi_held=psi_held, refl=refl, xi0=xi,
                     first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=True, mode_grid=MODE_GRID, shadow_stop=False, temper=args.temper, field_steps=FIELD_STEPS,
+                    kappa_std=args.kappa_std or None, ratio=ratio,
                     log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]

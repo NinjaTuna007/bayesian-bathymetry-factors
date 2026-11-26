@@ -21,6 +21,11 @@ The passes are matched through :math:`\xi` (`bbf.match`): they render through on
 nothing is paired or registered between rounds. Before the first round's ascent, :math:`\xi` is
 fitted with the depths held at the start: stepping both from :math:`\xi = 0` lets the depths take
 up shading that is reflectivity, into rough local optima they do not leave.
+
+Or they are matched by the ratio match (`bbf.match.ratio`, `with_ratio`): each round, once theta is
+final for it, the scored bins are put in ground cells and visits at the current depths, and the
+ping-sides' gains and the visits' shapes are taken there; all of it is held through the round's
+Gauss--Newton steps, while the Jacobians are retaken after every step.
 """
 import dataclasses
 import time
@@ -34,9 +39,17 @@ from bbf.inference.gauss_newton import gauss_newton
 from bbf.inference.init import first_echo
 from bbf.inference.jacobian import ping_side_jacobians
 from bbf.inference.laplace import laplace
-from bbf.inference.objective import Problem, beam_jacobian, render
+from bbf.inference.objective import (
+    Problem,
+    beam_jacobian,
+    ratio_gains,
+    ratio_means,
+    render,
+)
 from bbf.io import Pass
 from bbf.match import Reflectivity
+from bbf.match.cells import footprints
+from bbf.match.ratio import RatioMatch, assign, visit_shapes
 from bbf.mesh import locate
 from bbf.ping.first_return import FirstReturn
 from bbf.ping.geometry import trace
@@ -89,6 +102,37 @@ def observed_vertices(problem: Problem, d) -> np.ndarray:
     return seen
 
 
+def with_ratio(problem: Problem, d, times: list[np.ndarray], rm: RatioMatch, log=print) -> Problem:
+    r"""The problem with the ratio match (`bbf.match.ratio`) at depths d: cells and visits, gains and shapes, all held.
+
+    times: per pass (n,), the ping times that split a cell's bins of one pass into visits. Each scored
+    bin (`Problem.uses_all`: valid lit blocks, past `min_range` and outside the echo's onset zone) is put
+    in the ground cell of its footprint at d (`bbf.match.cells.footprints`, at theta's beam); bins
+    without a footprint (no seabed echo) stay in the ping factor. Then, at the render at d, each
+    ping-side's gain (`objective.ratio_gains`) and each visit's shape with the model error
+    (`visit_shapes`), which the round holds: followed, the gains give gradients with no curvature
+    behind them and the shapes let the factor widen itself.
+    """
+    pb = problem
+    if pb.refl is not None:
+        raise ValueError("the ratio match replaces the reflectivity field: give one of ratio and refl")
+    t0 = time.time()
+    fp = [footprints(pb.mesh, jnp.asarray(d), P, pb.theta, pb.u, pb.n_bins, pb.dr) for P in pb.poses]
+    ra = assign(fp, times, pb.y, pb.uses_all(), float(pb.theta.L), rm)
+    n_all = sum(int((u & (y > 0)).sum()) for u, y in zip(pb.uses_all(), pb.y))
+    n_m = sum(int(m.sum()) for m in ra.matched())
+    log(f"ratio match: {ra.n_cells} cells in {ra.n_units} visits, {n_m / max(n_all, 1):.0%} of the scored bins "
+        f"({n_m} of {n_all}; {rm.cell} m cells, {time.time() - t0:.0f}s)")
+    pb = dataclasses.replace(pb, ratio=ra)
+    S = render(pb, d)
+    gains = ratio_gains(pb, S)
+    k_v = visit_shapes(ratio_means(pb, S, gains), ra, rm.model_sd)
+    if ra.n_units:
+        log(f"ratio match shapes held, model error sd {rm.model_sd}: median {np.median(k_v):.1f}, "
+            f"largest {np.max(k_v):.1f}")
+    return dataclasses.replace(pb, ratio=dataclasses.replace(ra, shape=k_v), ratio_gain=gains)
+
+
 def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta0, u, rounds: int = 3,
           inner: int = 10, calib_every: int = 50, chunk: int = 32, seed: int = 0,
           onset: float = 1.5, laplace_samples: int = 0, trend_search=None, psi_prior=None,
@@ -96,7 +140,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           horizon: Horizon | None = None, label_floor: bool = True, callback=None,
           min_range: float = 0.0, fit_shape: bool = False, psi_held=None, mode_grid: int = 0,
           shadow_stop: bool = True, temper: float = 1.0, field_steps: int | None = None,
-          kappa_std: float | None = None, log=print) -> dict:
+          kappa_std: float | None = None, ratio: RatioMatch | None = None, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -153,8 +197,17 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     as much as a Gauss--Newton step gains); with `shadow_stop` False the shadow factor's gradient
     is that of its value; `temper` scales the intensity log likelihood.
 
+    ratio: match the passes by the ratio of measured to predicted intensity on shared ground cells
+    (`bbf.match.ratio`, `with_ratio`) instead of through a reflectivity field: each round, once theta
+    is final for it (after the calibration, the shape fit and `kappa_std`, and after the trend search,
+    which scores the plain problem), the scored bins are put in cells and visits at the current depths;
+    those of cells seen in at least `RatioMatch.min_visits` visits leave the ping factor for the
+    ratio match. The cells, gains and shapes are held through the round. Not together with refl.
+
     callback(round, d, beta, theta) is called after each round, e.g. to save intermediate results.
     """
+    if ratio is not None and refl is not None:
+        raise ValueError("the ratio match replaces the reflectivity field: give one of ratio and refl")
     if psi_held is not None and np.all(psi_held):
         psi_prior = psi_held = None
     poses = [p.local_poses(mesh.origin) for p in passes]
@@ -234,6 +287,9 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
             fixed = dataclasses.replace(problem, psi_prior=None)  # the search moves the trend only
             d, beta, xi, _ = search_trend(fixed, d, beta, observed=seen, xi=xi, log=log, **trend_search)
             log(f"round {rnd}: trend search picked slopes ({beta[0]:+.3f}, {beta[1]:+.3f})")
+        if ratio is not None:
+            problem = with_ratio(problem, d, [p.t for p in passes], ratio,
+                                 log=lambda s, rnd=rnd: log(f"round {rnd}: {s}"))
         J = jacobians(problem, d, xi)
         Jb = beam_jacobian(problem, d, xi=xi) if problem.free_psi else None
         log(f"round {rnd}: Jacobians in {time.time() - tj:.0f}s")

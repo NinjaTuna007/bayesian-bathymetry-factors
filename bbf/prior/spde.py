@@ -36,9 +36,11 @@ angles of :math:`60^\circ`, so
 with :math:`k_i` the number of triangles at vertex :math:`i` and :math:`m_{ij}` the number
 of triangles on edge :math:`ij`.
 """
+import dataclasses
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
+from typing import Self
 
 import numpy as np
 import scipy.sparse as sp
@@ -104,6 +106,37 @@ class Prior:
 
     The trend is planar when :math:`\mu_\beta` has 3 entries and constant when it has 1;
     alpha is the SPDE order (2 or 3).
+
+    slope, if given, adds a factor on the facet directions: each face's gradient :math:`\nabla u_f` of
+    :math:`u = d - X\beta` is :math:`\mathcal{N}(0, s^2 I)`, so
+
+    .. math::
+
+        \Lambda \leftarrow \Lambda + \frac{S}{A s^2}, \qquad A = \tfrac{\sqrt{3}}{4} h^2,
+
+    with :math:`S` the stiffness matrix (:math:`u^\top S u = A \sum_f \lVert \nabla u_f \rVert^2` on the equilateral
+    lattice). The Matérn part with :math:`\alpha = 2` leaves the slopes at the mesh scale free, and the
+    echo's :math:`\cos^2\varphi` then tilts single faces to explain brightness.
+
+    slope_nu, if given with slope, makes that factor heavy-tailed: each face's gradient is a
+    bivariate Student-t with :math:`\nu` degrees of freedom,
+
+    .. math::
+
+        \log p(\nabla u_f) = -\frac{\nu + 2}{2} \log\Bigl(1 + \frac{\lVert \nabla u_f \rVert^2}{(\nu + 2) s^2}\Bigr),
+
+    scaled so that its curvature at a level face is the Gaussian's, :math:`1 / s^2`. Mesh-scale
+    roughness costs about what it did, while a bank costs only the logarithm of its slope: at
+    :math:`s = 0.2`, :math:`\nu = 1` a face of :math:`40^\circ` costs 2.9 instead of 8.8. The factor is not quadratic,
+    so `Lambda` is its iteratively reweighted curvature at the gradients of `slope_at` (`at`),
+
+    .. math::
+
+        \Lambda = \Lambda_\text{Matérn} + \sum_f w_f\, G_f^\top G_f, \qquad w_f = \frac{\nu + 2}{(\nu + 2) s^2 + \lVert \nabla u_f \rVert^2},
+
+    with :math:`G_f` the face's gradient operator; at a level `slope_at` (the default) it is the
+    Gaussian factor's. `log_density` and `grad` are exact; with `slope_at` at the same point,
+    :math:`-\Lambda u` is the gradient in :math:`u`.
     """
     mesh: Mesh
     rho: float
@@ -111,6 +144,9 @@ class Prior:
     mu_beta: np.ndarray
     Sigma_beta: np.ndarray
     alpha: int = 2
+    slope: float | None = None
+    slope_nu: float | None = None
+    slope_at: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     @property
     def n_beta(self) -> int:
@@ -118,7 +154,47 @@ class Prior:
 
     @cached_property
     def Lambda(self) -> sp.csc_matrix:
-        return precision(self.mesh, self.rho, self.sigma, self.alpha)
+        Q = self.Lambda_matern
+        if self.slope is not None and self.slope_nu is None:
+            Q = Q + stiffness(self.mesh) / (math.sqrt(3) / 4 * self.mesh.h**2 * self.slope**2)
+        elif self.slope is not None:
+            gx, gy = self._face_gradient(np.zeros(self.mesh.n_vertices) if self.slope_at is None else self.slope_at)
+            w = self._slope_weights(gx, gy)
+            Gx, Gy = self._grad_rows
+            Q = Q + Gx.T @ sp.diags(w) @ Gx + Gy.T @ sp.diags(w) @ Gy
+        return sp.csc_matrix(Q)
+
+    @cached_property
+    def Lambda_matern(self) -> sp.csc_matrix:
+        r"""The Matérn part of the precision alone."""
+        return precision(self.mesh, self.rho, self.sigma, self.alpha).tocsc()
+
+    @cached_property
+    def _grad_rows(self) -> tuple[sp.csr_matrix, sp.csr_matrix]:
+        r"""Sparse (m, n) maps from vertex values to the x and y components of each face's gradient."""
+        t = np.asarray(self.mesh.triangles)
+        ops = np.asarray(self.mesh._grad_ops)  # (m, 2, 2) on (d_1 - d_0, d_2 - d_0)
+        m = len(t)
+        rows = np.repeat(np.arange(m), 3)
+        out = []
+        for i in (0, 1):
+            vals = np.stack([-ops[:, i, 0] - ops[:, i, 1], ops[:, i, 0], ops[:, i, 1]], axis=1).ravel()
+            out.append(sp.csr_matrix((vals, (rows, t.ravel())), shape=(m, self.mesh.n_vertices)))
+        return out[0], out[1]
+
+    def _face_gradient(self, u):
+        Gx, Gy = self._grad_rows
+        return Gx @ u, Gy @ u
+
+    def _slope_weights(self, gx, gy):
+        nu, s = self.slope_nu, self.slope
+        return (nu + 2) / ((nu + 2) * s**2 + gx**2 + gy**2)
+
+    def at(self, d: np.ndarray, beta: np.ndarray) -> Self:
+        r"""This prior with the heavy-tailed slope factor's curvature taken at (d, :math:`\beta`); itself otherwise."""
+        if self.slope is None or self.slope_nu is None:
+            return self
+        return dataclasses.replace(self, slope_at=np.asarray(d, float) - self.X @ np.asarray(beta, float))
 
     @cached_property
     def X(self) -> np.ndarray:
@@ -131,11 +207,23 @@ class Prior:
     def log_density(self, d: np.ndarray, beta: np.ndarray) -> float:
         r""":math:`\log p(\beta) + \log p(d \mid \beta)`, up to a constant independent of :math:`d` and :math:`\beta`."""
         u, b = d - self.X @ beta, beta - self.mu_beta
+        if self.slope is not None and self.slope_nu is not None:
+            gx, gy = self._face_gradient(u)
+            nu = self.slope_nu
+            lt = -0.5 * (nu + 2) * np.sum(np.log1p((gx**2 + gy**2) / ((nu + 2) * self.slope**2)))
+            return float(lt) - 0.5 * float(u @ (self.Lambda_matern @ u) + b @ self.P_beta @ b)
         return -0.5 * float(u @ (self.Lambda @ u) + b @ self.P_beta @ b)
 
     def grad(self, d: np.ndarray, beta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         r"""Gradient of :meth:`log_density` with respect to :math:`(d, \beta)`."""
-        Lu = self.Lambda @ (d - self.X @ beta)
+        u = d - self.X @ beta
+        if self.slope is not None and self.slope_nu is not None:
+            gx, gy = self._face_gradient(u)
+            w = self._slope_weights(gx, gy)
+            Gx, Gy = self._grad_rows
+            Lu = self.Lambda_matern @ u + Gx.T @ (w * gx) + Gy.T @ (w * gy)
+        else:
+            Lu = self.Lambda @ u
         return -Lu, self.X.T @ Lu - self.P_beta @ (beta - self.mu_beta)
 
     def joint_precision(self) -> sp.csc_matrix:
@@ -147,7 +235,8 @@ class Prior:
             -X^\top \Lambda & \Sigma_\beta^{-1} + X^\top \Lambda X \end{pmatrix}.
 
 
-        The prior is quadratic, so this is also its exact (negative) Hessian.
+        The prior is quadratic, so this is also its exact (negative) Hessian; with the heavy-tailed
+        slope factor it is the reweighted curvature at `slope_at`.
         """
         LX = sp.csc_matrix(self.Lambda @ self.X)
         corner = sp.csc_matrix(self.P_beta + self.X.T @ (self.Lambda @ self.X))
@@ -160,7 +249,7 @@ def sample(prior: Prior, rng: np.random.Generator | int | None = None, beta: np.
 
     With :math:`\Lambda = \tau^2 K C^{-1} K`, :math:`u = K^{-1} C^{1/2} z / \tau` with
     :math:`z \sim \mathcal{N}(0, I)` has covariance :math:`\Lambda^{-1}`, one sparse solve with
-    :math:`K`. For :math:`\alpha = 3` the odd power of :math:`K` has no such square root, so
+    :math:`K`. For :math:`\alpha = 3` (and with a slope factor) the odd power of :math:`K` has no such square root, so
     :math:`u = P^\top L^{-\top} z` from the sparse Cholesky factor :math:`P \Lambda P^\top = L L^\top`.
     """
     rng = np.random.default_rng(rng)
@@ -168,7 +257,7 @@ def sample(prior: Prior, rng: np.random.Generator | int | None = None, beta: np.
         beta = np.atleast_1d(rng.multivariate_normal(np.atleast_1d(prior.mu_beta), np.atleast_2d(prior.Sigma_beta)))
     tau = math.sqrt(_tau2(prior.rho, prior.sigma, prior.alpha))
     z = rng.standard_normal(prior.mesh.n_vertices)
-    if prior.alpha == 3:
+    if prior.alpha == 3 or prior.slope is not None:
         f = cho_factor(prior.Lambda)
         y = f.solve(z, system="Lt")
         u = np.empty_like(y)

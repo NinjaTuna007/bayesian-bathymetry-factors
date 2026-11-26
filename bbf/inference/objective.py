@@ -26,6 +26,15 @@ are an argument too: the beam reaches :math:`F` through :math:`S`, the gain dire
 includes them; otherwise they stay at the values in `Problem.theta`. `Problem.psi_held` keeps
 some of them fixed while the others are fitted, e.g. the gain with the beam free: the labels and
 the background are relative to the gain, so a fitted gain chooses which bins are scored.
+
+With `Problem.ratio` set, the passes are matched by the ratio match instead (`bbf.match.ratio`):
+the bins of ground cells seen in several visits leave the ping factor and are scored by
+:math:`\tau \sum_\text{cells} \log p(Y_{1..m})`, with :math:`\tau` = `Problem.temper` as on the ping and
+shadow factors (its bins are the ping factor's otherwise, and their sums assume them independent too).
+Its predicted means are the ping factor's, :math:`\bar I_b = g_c(r_b) (e^{u} S_b + N_c(r_b, o))`, with the
+background law in range and transmit power :math:`o` (`bbf.ping.factor.background`), at each
+ping-side's gain :math:`u` held for the round (`Problem.ratio_gain`, `ratio_gains`). The field
+and the ratio match are two ways of matching the passes; a problem takes one of them.
 """
 from dataclasses import dataclass
 from functools import cache, cached_property, lru_cache
@@ -35,8 +44,16 @@ import jax.numpy as jnp
 import numpy as np
 
 from bbf import mesh as M
+from bbf.match.ratio import RatioAssignment, log_ratio_match
 from bbf.match.reflectivity import Reflectivity
-from bbf.ping.factor import WARM_ITERS, bin_ranges, laplace_ping_side, log_gain
+from bbf.ping.factor import (
+    WARM_ITERS,
+    bin_ranges,
+    laplace_ping_side,
+    log_gain,
+    mode,
+    predicted,
+)
 from bbf.ping.first_return import FirstReturn, first_return_term
 from bbf.ping.horizon import Horizon, horizon_term
 from bbf.ping.render import unit_intensity
@@ -72,6 +89,12 @@ class Problem:
     mode_grid: int = 0  # starts of each log-kappa mode search (`bbf.ping.factor.mode`); 0: from one start
     shadow_stop: bool = True  # hold log-kappa fixed in the shadow factor's derivative (`log_shadow_side`)
     shadow_gain: bool = False  # score dark blocks against the gain the labels were taken with (`lit_probability`)
+    ratio: RatioAssignment | None = None  # ratio match (bbf.match.ratio); its bins leave the ping factor
+    ratio_gain: list[np.ndarray] | None = None  # per pass (n, 2): the ratio match's log-kappas, held fixed (`ratio_gains`)
+
+    def __post_init__(self):
+        if self.ratio is not None and self.refl is not None:
+            raise ValueError("the ratio match replaces the reflectivity field: give one of ratio and refl")
 
     @property
     def free_psi(self) -> bool:
@@ -101,7 +124,13 @@ class Problem:
         return self.y[0].shape[-1]
 
     def uses(self) -> list[np.ndarray]:
-        """Per pass (n, 2, B): bins the ping factor scores (those in valid lit blocks)."""
+        """Per pass (n, 2, B): bins the ping factor scores (those in valid lit blocks, less those of the ratio match)."""
+        if self.ratio is None:
+            return self._uses
+        return [u & ~m for u, m in zip(self._uses, self.ratio.matched(), strict=True)]
+
+    def uses_all(self) -> list[np.ndarray]:
+        """Per pass (n, 2, B): every scored bin (valid lit blocks), whichever factor scores it."""
         return self._uses
 
     @cached_property
@@ -213,42 +242,111 @@ def data_term(problem: Problem, warm: bool = False):
     valids = [jnp.ones(lab.shape, bool) for lab in labels] if pb.valid is None else [jnp.asarray(v) for v in pb.valid]
     offsets = ([jnp.zeros(y.shape[0]) for y in ys] if pb.kappa_offset is None
                else [jnp.asarray(o, dtype=float) for o in pb.kappa_offset])
+    matched = pb.ratio is not None and pb.ratio.n_units > 0
+    uses_all = [jnp.asarray(u) for u in pb.uses_all()]
+    gains = ([jnp.zeros(y.shape[:2]) for y in ys] if pb.ratio_gain is None
+             else [jnp.asarray(g, dtype=float) for g in pb.ratio_gain])
 
-    def side_terms(th, side, y, S, use, lab, val, u0, off):
+    def ratio_mean(th, side, y, S, off, use_all, gain):
+        """Predicted means (B,) the ratio match sees for one ping-side; zeros without it."""
+        if not matched:
+            return jnp.zeros_like(S)
+        # the ping-side's gain: held for the round when given (`ratio_gains`); otherwise its mode over
+        # every scored bin, which the gradient follows (and the curvature, `ggn.assemble`, does not)
+        u_r = gain if pb.ratio_gain is not None else mode(th, side, dr, y, S, use_all, offset=off, temper=pb.temper,
+                                                          grid=pb.mode_grid)[0]
+        return predicted(S, u_r, th, side, dr, off)[0]
+
+    def side_terms(th, side, y, S, use, lab, val, u0, off, use_all, gain):
         if warm:
             ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, u0=u0, iters=WARM_ITERS, offset=off,
                                             temper=pb.temper, grid=pb.mode_grid)
         else:
             ping, u_hat = laplace_ping_side(th, side, dr, y, S, use, offset=off, temper=pb.temper, grid=pb.mode_grid)
+        I_bar = ratio_mean(th, side, y, S, off, use_all, gain)
         if pb.horizon is not None:  # the horizon factor scores the labels instead
-            return ping, u_hat
+            return ping, u_hat, I_bar
         ratio: jax.Array | float = 1.0
         if pb.shadow_gain:  # the labels were thresholded with the gain of `pb.theta`
             B, r = pb.theta.block, bin_ranges(pb.n_bins, dr)
             lg = log_gain(r, th.at(side).gain_db) - log_gain(r, pb.theta.at(side).gain_db)
             ratio = jnp.exp(lg[: pb.n_bins // B * B].reshape(-1, B).mean(axis=1))
         return ping + pb.temper * log_shadow_side(th, side, lab, S, u_hat, val, dr, off, stop=pb.shadow_stop,
-                                                  gain_ratio=ratio), u_hat
+                                                  gain_ratio=ratio), u_hat, I_bar
 
     psi0 = _psi(pb, None)
 
     def F(S_list, u0_list=None, psi=None):
         th = with_psi(pb.theta, psi0 if psi is None else psi)
-        total, u_hats = 0.0, []
+        total, u_hats, I_bars = 0.0, [], []
         if u0_list is None:
             u0_list = [jnp.zeros(y.shape[:2]) for y in ys]
-        for y, S, use, lab, val, u0, off in zip(ys, S_list, uses, labels, valids, u0_list, offsets):
-            us = []
+        for y, S, use, lab, val, u0, off, ua, gn in zip(ys, S_list, uses, labels, valids, u0_list, offsets, uses_all,
+                                                         gains):
+            us, ibs = [], []
             for side in (0, 1):
-                v, uh = jax.vmap(lambda yy, SS, uu, ll, vv, u0s, oo, side=side:
-                                 side_terms(th, side, yy, SS, uu, ll, vv, u0s, oo))(
-                    y[:, side], S[:, side], use[:, side], lab[:, side], val[:, side], u0[:, side], off)
+                v, uh, ib = jax.vmap(lambda yy, SS, uu, ll, vv, u0s, oo, aa, gg, side=side:
+                                     side_terms(th, side, yy, SS, uu, ll, vv, u0s, oo, aa, gg))(
+                    y[:, side], S[:, side], use[:, side], lab[:, side], val[:, side], u0[:, side], off, ua[:, side],
+                    gn[:, side])
                 total = total + v.sum()
                 us.append(uh)
+                ibs.append(ib)
             u_hats.append(jnp.stack(us, axis=1))
+            I_bars.append(jnp.stack(ibs, axis=1))
+        if matched:
+            assert pb.ratio is not None
+            total = total + pb.temper * log_ratio_match(I_bars, pb.ratio)
         return total, u_hats
 
     return jax.jit(F)
+
+
+def ratio_gains(problem: Problem, S, psi=None) -> list[np.ndarray]:
+    r"""Per pass (n, 2): each ping-side's log-kappa at its mode over all its scored bins, at the render S.
+
+    The mode is the ping factor's (`bbf.ping.factor.mode`, with the problem's transmit-power offset,
+    `temper` and `mode_grid`), over every scored bin (`Problem.uses_all`), matched or not: the gain is
+    the ping-side's, whichever factor scores its bins.
+
+    The outer loop takes these once a round and holds them fixed (`Problem.ratio_gain`), like the
+    labels and the cells: the gradient then has no path through the gains, which the curvature
+    (`ggn.assemble`) holds fixed too. Followed instead, a vertex that changes a few bright bins shifts
+    its ping-side's gain and so every matched visit of the ping-side; on the real data that gave
+    gradients of :math:`10^5` per meter with no curvature behind them.
+    """
+    pb = problem
+    th = with_psi(pb.theta, _psi(pb, psi))
+    offsets = ([np.zeros(y.shape[0]) for y in pb.y] if pb.kappa_offset is None else pb.kappa_offset)
+
+    def one(yy, SS, aa, oo, side):
+        return mode(th, side, pb.dr, yy, SS, aa, offset=oo, temper=pb.temper, grid=pb.mode_grid)[0]
+
+    f = [jax.jit(jax.vmap(lambda yy, SS, aa, oo, side=side: one(yy, SS, aa, oo, side))) for side in (0, 1)]
+    out = []
+    for y, Sp, ua, off in zip(pb.y, S, pb.uses_all(), offsets, strict=True):
+        g = np.zeros(y.shape[:2])
+        for side in (0, 1):
+            g[:, side] = np.asarray(f[side](jnp.asarray(y[:, side]), jnp.asarray(Sp[:, side]), jnp.asarray(ua[:, side]),
+                                            jnp.asarray(off, dtype=float)))
+        out.append(g)
+    return out
+
+
+def ratio_means(problem: Problem, S, gains, psi=None) -> list[np.ndarray]:
+    r"""Per pass (n, 2, B): the predicted means :math:`\bar I_b` the ratio match sees, at the render S and gains (n, 2) per pass.
+
+    As the data term's: the ping factor's mean with the background law at each ping's transmit power.
+    """
+    pb = problem
+    th = with_psi(pb.theta, _psi(pb, psi))
+    offsets = ([np.zeros(y.shape[0]) for y in pb.y] if pb.kappa_offset is None else pb.kappa_offset)
+    out = []
+    for Sp, g, off in zip(S, gains, offsets, strict=True):
+        ib = np.stack([np.asarray(jax.vmap(lambda SS, uu, oo, side=side: predicted(SS, uu, th, side, pb.dr, oo)[0])(
+            jnp.asarray(Sp[:, side]), jnp.asarray(g[:, side]), jnp.asarray(off, dtype=float))) for side in (0, 1)], axis=1)
+        out.append(ib)
+    return out
 
 
 def data_vjp(problem: Problem, d, g_S: list[np.ndarray], psi=None, xi=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -297,7 +395,8 @@ def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None,
     (`data_term(problem, warm=True)`) together with u0, the log-kappa modes to start from;
     psi: the sonar parameters (2, 3), default theta's; xi: the log-reflectivity field (n,),
     default 0. details hold the rendered S, :math:`\hat u` per pass, the data term's value and its
-    gradient in d (`grad_d_data`), and
+    gradient in d (`grad_d_data`), `u_ratio`, the ratio match's gains per pass (n, 2) or None without it
+    (`ggn.assemble` needs them), and
     `grad_psi` and `grad_xi`, the gradients in :math:`\psi` and :math:`\xi` (including their priors
     when they are unknowns), and `first_return` and `horizon`, those factors' GGN rows and weights
     (`ggn.assemble`) or None. S: the render at (d, :math:`\psi`, :math:`\xi`) if already done.
@@ -313,7 +412,11 @@ def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None,
     lp_fr, g_fr, fr = _first_return(problem, d)
     lp_hz, g_hz, hz = _horizon(problem, d)
     value = float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta)) + lp_psi + lp_xi + lp_fr + lp_hz
-    details = {"S": S, "u": [np.asarray(u) for u in u_hats], "data": float(val), "grad_d_data": grad_d,
+    u_ratio = None
+    if problem.ratio is not None:  # the ratio match's gains: the held ones, else their modes at this render
+        u_ratio = ([np.asarray(g, dtype=float) for g in problem.ratio_gain] if problem.ratio_gain is not None
+                   else ratio_gains(problem, S, psi))
+    details = {"S": S, "u": [np.asarray(u) for u in u_hats], "u_ratio": u_ratio, "data": float(val), "grad_d_data": grad_d,
                "grad_psi": np.asarray(g_psi_F) + g_psi_S + g_psi_prior, "grad_xi": g_xi_S + g_xi_prior,
                "first_return": fr, "first_return_value": lp_fr, "horizon": hz, "horizon_value": lp_hz}
     return value, (grad_d + gd_prior + g_fr + g_hz, gb_prior), details

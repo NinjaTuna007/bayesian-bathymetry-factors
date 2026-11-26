@@ -34,6 +34,14 @@ stays a damped Gauss--Newton direction whose gain the quadratic model predicts:
 
 :math:`\psi` is also kept within `PSI_LO`..`PSI_HI`: on the real data a single step moved a beam
 centre by :math:`26^\circ` and sent a beam width negative.
+
+The model and the gradient must describe the same objective: every path from the unknowns to the
+log posterior that the gradient follows needs rows in :math:`H`. With the ratio match
+(`Problem.ratio`) its cells, visits, shapes and gains (`Problem.ratio_gain`) are therefore held
+for the whole loop, while the Jacobians are retaken with `relin` and its curvature with them:
+followed, the gains gave gradients of :math:`10^5` per meter with no curvature behind them, and the
+shapes let the factor widen itself (`bbf.match.ratio`). Its rows have no :math:`u` entries, so
+:math:`H_{uu}` stays diagonal and the elimination of :math:`u` in :math:`m(\delta)` above holds as it is.
 """
 import time
 
@@ -101,8 +109,9 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     log(f"  GN start: ell = {ell:.1f}")
     for it in range(max_iter):
         t0 = time.time()
+        # the prior's curvature where the depths are: its heavy-tailed slope factor, if any, is reweighted
         H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, S0=S0, fr=det["first_return"],
-                         hz=det["horizon"])
+                         hz=det["horizon"], prior=problem.prior.at(d, beta), u_ratio=det["u_ratio"])
         g = np.zeros(lay["size"])
         g[:n], g[ib:ib + nb] = gd, gb
         if field:

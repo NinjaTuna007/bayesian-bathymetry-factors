@@ -46,10 +46,12 @@ def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=Non
 
     Returns the depth standard deviations (n,), those of :math:`\beta` (3, or 1),, of :math:`\psi` (2, 3)
     when it is free (zero for its held components), of :math:`\xi` (n,) when the problem has the field, and the augmented
-    precision H it came from (undamped).
+    precision H it came from (undamped). With the ratio match, its curvature is that of the problem's
+    held cells, shapes and gains (`ggn.assemble`).
     """
     _, _, det = value_and_grad(problem, d, beta, psi=psi, xi=xi)
-    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, fr=det["first_return"], hz=det["horizon"])
+    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, fr=det["first_return"], hz=det["horizon"],
+                     prior=problem.prior.at(d, beta), u_ratio=det["u_ratio"])
     lay = ggn.layout(problem)
     free = np.ones(lay["size"], bool)
     if problem.free_psi and problem.psi_held is not None:

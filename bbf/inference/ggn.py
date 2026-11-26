@@ -18,6 +18,12 @@ likelihood in a scalar prediction and :math:`G` that prediction's derivative:
   block mean of :math:`S` with :math:`\hat\kappa` held fixed; or, with the horizon factor
   (`bbf.ping.horizon`), its rows on the depths in place of these;
 * the first-return and horizon factors: their own rows :math:`A` and weights :math:`W` on the depths;
+* the ratio match (`Problem.ratio`, `bbf.match.ratio`): per cell, prediction :math:`\eta_v = \log \bar I_v`
+  of each visit, Fisher :math:`\tau (\mathrm{diag}(k) - k k^\top / K)` with the held shapes :math:`k`, as rows
+  :math:`A` and :math:`B` (`bbf.match.ratio.fisher_rows`) through :math:`\partial \bar I_b / \partial S_b = g_c(r_b) e^{u}`
+  over all passes together. The gains :math:`u` it sees are held for the round
+  (`objective.ratio_gains`), not the ping factor's variables, so it has no :math:`u` entries and
+  :math:`H_{uu}` stays diagonal (`gauss_newton.predicted_gain` relies on that);
 
 plus the prior's exact precision on :math:`(d, \beta)`, that of :math:`\xi`, and the Gaussian prior
 on each :math:`u`.
@@ -42,7 +48,15 @@ import numpy as np
 import scipy.sparse as sp
 
 from bbf.inference.objective import Problem
-from bbf.ping.factor import DB_TO_LOG_I, background, bin_ranges, log_gamma, predicted
+from bbf.match.ratio import fisher_rows
+from bbf.ping.factor import (
+    DB_TO_LOG_I,
+    background,
+    bin_ranges,
+    log_gain,
+    log_gamma,
+    predicted,
+)
 from bbf.ping.shadow import lit_probability
 from bbf.ping.theta import with_psi
 
@@ -119,8 +133,11 @@ def shadow_rows(problem: Problem, S, u_hat):
 
 
 def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None, S0=None,
-             fr=None, hz=None) -> sp.csc_matrix:
+             fr=None, hz=None, prior=None, u_ratio=None) -> sp.csc_matrix:
     r"""The augmented GGN matrix :math:`H` (size from `layout`), symmetric positive semidefinite plus priors.
+
+    prior: the depth prior whose precision goes in, default the problem's; e.g. the problem's with
+    its heavy-tailed slope factor reweighted at the current depths (`bbf.prior.Prior.at`).
 
     J[p][t][c]: the frozen Jacobian of pass p, ping t, side c, (B, n) or (B, 2n) with the field.
     S, u_hat: the data term's rendered intensities and :math:`\hat u` per pass (n, 2).
@@ -135,6 +152,13 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
     fr: the first-return factor's rows A (m, n) and weights W (m,) (`value_and_grad`'s details),
     adding :math:`A^\top W A` to the depth block; hz: the same for the horizon factor. With
     `Problem.horizon` set, the dark-block shadow rows are left out, as the data term leaves them out.
+
+    u_ratio: the ratio match's gains per pass (n, 2) (`value_and_grad`'s details), needed when the
+    problem has one; its curvature :math:`\tau D^\top (A^\top A - B^\top B) D`, with :math:`D` the bins'
+    :math:`\partial \bar I` (`bbf.match.ratio.fisher_rows`), goes through the Jacobians of all passes
+    together, and through the beam derivatives and the gain for :math:`\psi`. The rows are those of the
+    held gains and shapes: with gains that follow the predictions (no `Problem.ratio_gain`) the
+    path through them is missing here, though the gradient has it.
     """
     if psi is not None:
         problem = dataclasses.replace(problem, theta=with_psi(problem.theta, psi))
@@ -163,6 +187,7 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
     B, nbin = problem.theta.block, problem.n_bins
     nb = nbin // B
     in_block = np.arange(nbin) < nb * B
+    J_all, dS_all, gain_all = [], [], []  # per pass, for the ratio match's rows across passes
     std = np.array([problem.theta.at(side).log_kappa_std for side in (0, 1)])
     for p, (W, a, c) in enumerate(pw):
         # every bin of the pass as one row: ping-major, port then starboard, as the arrays (n, 2, B) ravel
@@ -178,6 +203,7 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
             ok = (s_now > 0) & (s_then > 0)
             scale = np.where(ok, np.clip(s_now / np.where(ok, s_then, 1.0), 1e-3, 1e3), 1.0)
             Jp = sp.csr_matrix(sp.diags(scale) @ Jp)
+        J_all.append(Jp)
         ps = row // nbin  # ping-side of each row
         u0 = lay["u_pass"][p]
         # ping bins: field-field, field-u, u-u
@@ -199,7 +225,10 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
             # psi columns of each bin, in its own side's three: :math:`a\,\partial S/\partial(\beta_0, \omega)` and :math:`\partial \log g/\partial g_1`
             own = np.repeat(np.eye(2, dtype=bool)[ps % 2], 3, axis=1)  # (rows, 6): the bin's side's columns
             dS = np.where(own, np.tile(np.column_stack([scale[:, None] * Jbs[p].reshape(-1, 2), np.zeros(len(w))]), 2), 0.0)
-            Gp = a_[:, None] * dS + np.where(own, np.tile(np.tile(kg, n_ps)[:, None], 6), 0.0) * [0, 0, 1, 0, 0, 1]
+            gain = np.where(own, np.tile(np.tile(kg, n_ps)[:, None], 6), 0.0) * [0, 0, 1, 0, 0, 1]
+            Gp = a_[:, None] * dS + gain
+            dS_all.append(dS)
+            gain_all.append(gain)
             H_fpsi += Jp.T @ ((w * a_)[:, None] * Gp)
             H_xpsi[u0 - nf: u0 - nf + n_ps] += np.column_stack([np.bincount(ps, w * c_ * Gp[:, k], n_ps) for k in range(6)])
             H_xpsi[ip - nf: ip - nf + 6] += Gp.T @ (w[:, None] * Gp)
@@ -207,6 +236,36 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
                 Gs = agg @ dS  # the gain does not enter p_j
                 H_fpsi += G.T @ Gs
                 H_xpsi[ip - nf: ip - nf + 6] += Gs.T @ Gs
+    if problem.ratio is not None and problem.ratio.n_units > 0:
+        # ratio match: :math:`\tau D^\top (A^\top A - B^\top B) D` with D the bins' :math:`\partial \bar I`, through the
+        # Jacobians for (d, xi) and, with psi free, through the beam derivatives and the gain
+        if u_ratio is None:
+            raise ValueError("the problem has a ratio match: pass its gains u_ratio")
+        th, r = problem.theta, np.asarray(bin_ranges(nbin, problem.dr))
+        Ibar, dI = [], []
+        for p, (Sp, ur) in enumerate(zip(S, u_ratio, strict=True)):
+            off = _offset(problem, p)[:, None]
+            ib, di = np.zeros_like(Sp), np.zeros_like(Sp)
+            for side in (0, 1):
+                ib[:, side] = np.asarray(predicted(Sp[:, side], ur[:, side, None], th, side, problem.dr, off)[0])
+                di[:, side] = np.exp(np.asarray(log_gain(r, th.at(side).gain_db)) + ur[:, side, None])  # :math:`g_c(r_b) e^u`
+            Ibar.append(ib)
+            dI.append(di)
+        A, Bm = fisher_rows(Ibar, problem.ratio)
+        A, Bm = math.sqrt(problem.temper) * A, math.sqrt(problem.temper) * Bm
+        dIv = np.concatenate([x.ravel() for x in dI])
+        Jst = sp.csr_matrix(sp.vstack(J_all))
+        GA, GB = (A @ sp.diags(dIv)) @ Jst, (Bm @ sp.diags(dIv)) @ Jst
+        add(GA.T @ GA)
+        add(-(GB.T @ GB))
+        if free:
+            # :math:`\partial \bar I_b / \partial \psi`: the beam's through S, and the gain's, which scales all of
+            # :math:`\bar I_b` (the background is behind the gain too)
+            Iv = np.concatenate([x.ravel() for x in Ibar])
+            D = dIv[:, None] * np.vstack(dS_all) + Iv[:, None] * np.vstack(gain_all)  # bins x psi
+            PA, PB = A @ D, Bm @ D
+            H_fpsi += GA.T @ PA - GB.T @ PB
+            H_xpsi[ip - nf: ip - nf + 6] += PA.T @ PA - PB.T @ PB
     if free:
         H_xpsi[ip - nf: ip - nf + 6] = 0.5 * (H_xpsi[ip - nf: ip - nf + 6] + H_xpsi[ip - nf: ip - nf + 6].T)
         dpsi = sp.coo_matrix(np.vstack([H_fpsi, H_xpsi]))  # rows: every variable, columns: psi
@@ -220,7 +279,7 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
         sd = np.asarray(problem.psi_prior[1], float).ravel()
         add(sp.coo_matrix((1.0 / sd**2, (np.arange(ip, ip + 6), np.arange(ip, ip + 6))), shape=(size, size)))
     # prior on (d, beta), with beta moved behind the field variables, and on xi
-    Pr = problem.prior.joint_precision().tocoo()
+    Pr = (problem.prior if prior is None else prior).joint_precision().tocoo()
     at = np.concatenate([np.arange(n), lay["beta"] + np.arange(lay["n_beta"])])
     add(sp.coo_matrix((Pr.data, (at[Pr.row], at[Pr.col])), shape=(size, size)))
     for rows in (fr, hz):
