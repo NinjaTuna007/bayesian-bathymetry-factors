@@ -199,17 +199,39 @@ def far_edge_points(ps: Pass, edge: np.ndarray, rise: float = 0.0, window: int =
     return np.concatenate(out) if out else np.zeros((0, 3))
 
 
+def plane_down(poses: np.ndarray) -> np.ndarray:
+    r"""Unit vectors (n, 3), world, of the direction in each ping plane nearest to straight down.
+
+    The ping plane has normal :math:`h = R e_x = (\sin\psi\cos\phi_p, \cos\psi\cos\phi_p, \sin\phi_p)`
+    (`bbf.ping.geometry.pose_frame`), so with :math:`g = -e_z`,
+
+    .. math::
+
+        e = \frac{g - (g^\top h) h}{\lVert g - (g^\top h) h \rVert}
+          = (\sin\phi_p \sin\psi,\ \sin\phi_p \cos\psi,\ -\cos\phi_p).
+
+    Over a level seabed the nearest point of the plane lies along :math:`e`: at pitch :math:`\phi_p` it
+    is :math:`r \sin\phi_p` ahead of the sonar and :math:`r \cos\phi_p` below it. Roll turns the sonar
+    within the plane and does not move it.
+    """
+    poses = np.asarray(poses, dtype=float)
+    sp, cp = np.sin(poses[:, 4]), np.cos(poses[:, 4])
+    return np.column_stack([sp * np.sin(poses[:, 5]), sp * np.cos(poses[:, 5]), -cp])
+
+
 def first_echo_points(ps: Pass, r0: np.ndarray) -> np.ndarray:
     r"""World seabed points (m, 3) below the sonar from the later first echo of each ping.
 
     Each side's first echo is the nearest seabed in its half of the ping plane, never farther
     than the seabed below the sonar; on a slope the up-slope side's comes from the bank. The
-    later of the two is the tighter bound on the depth below the sonar, so it places the point.
+    later of the two is the tighter bound on the depth below the sonar, so it places the point:
+    at that range along the ping plane's downward direction (`plane_down`), which the pitch
+    tilts ahead of or behind the vertical.
     """
     fin = np.isfinite(r0)
     r = np.where(fin.any(axis=1), np.max(np.where(fin, r0, -np.inf), axis=1), np.nan)
     ok = np.isfinite(r)
-    return np.column_stack([ps.poses[ok, 0], ps.poses[ok, 1], ps.poses[ok, 2] - r[ok]])
+    return ps.poses[ok, :3] + r[ok, None] * plane_down(ps.poses[ok])
 
 
 def bank_points(ps: Pass, r0: np.ndarray, min_gap: float = 1.0, step: float = 1.0, window: int = 9,
@@ -224,6 +246,8 @@ def bank_points(ps: Pass, r0: np.ndarray, min_gap: float = 1.0, step: float = 1.
     point, for the pings whose echoes differ by more than `min_gap` m. The echoes are first
     replaced by their running median over `window` pings per side: single detections are off by
     metres on some pings (a fish, the other channel's leak), and each would raise a bank of its own.
+    The construction is in the ping plane (outboard, and down along `plane_down`), so the pitch moves
+    the points along the track with the point below the sonar.
     Where along the swath the seabed really rises is not in the first echoes; the intensities have
     to move it from there.
 
@@ -238,11 +262,12 @@ def bank_points(ps: Pass, r0: np.ndarray, min_gap: float = 1.0, step: float = 1.
         warnings.simplefilter("ignore", RuntimeWarning)  # windows without a detection give NaN
         r0 = np.stack([np.nanmedian(r0[max(t - h, 0):t + h + 1], axis=0) for t in range(len(r0))])
     pts = []
-    for pose, (rp, rs) in zip(ps.poses, r0):
+    down = plane_down(ps.poses)
+    for pose, e, (rp, rs) in zip(ps.poses, down, r0):
         if not (np.isfinite(rp) and np.isfinite(rs)) or abs(rp - rs) <= min_gap:
             continue
         D, r, sign = max(rp, rs), min(rp, rs), (1.0 if rs < rp else -1.0)
-        out = sign * np.array([np.cos(pose[5]), -np.sin(pose[5])])  # starboard is :math:`(\cos\psi, -\sin\psi)`
+        out = sign * np.array([np.cos(pose[5]), -np.sin(pose[5]), 0.0])  # starboard is :math:`(\cos\psi, -\sin\psi)`
         cg = r / D
         sg = np.sqrt(1.0 - cg**2)
         reach = r * sg
@@ -250,7 +275,8 @@ def bank_points(ps: Pass, r0: np.ndarray, min_gap: float = 1.0, step: float = 1.
             reach = max(reach, (D - top) * cg / sg)
         u = np.arange(step, reach, step)
         u = np.append(u, reach)
-        pts.append(np.column_stack([pose[0] + u * out[0], pose[1] + u * out[1], pose[2] - D + u * sg / cg]))
+        # in the ping plane: u outboard (horizontal) and D - u tan(gamma) along its downward direction
+        pts.append(pose[:3] + u[:, None] * out + (D - u * sg / cg)[:, None] * e)
     return np.concatenate(pts) if pts else np.zeros((0, 3))
 
 

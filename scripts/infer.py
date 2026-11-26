@@ -148,6 +148,8 @@ def main():
                     help="label everything beyond each ping-side's far edge (where the seabed ends for good) dark, "
                          "and start with the seabed at the water surface there; "
                          "with --horizon, score it up to --far-extent m beyond")
+    ap.add_argument("--no-far-start", action="store_true",
+                    help="with --far-edge, keep the far-edge points out of the start (labels and horizon scoring only)")
     ap.add_argument("--far-rise", type=float, default=0.0, metavar="M",
                     help="height of the water surface above the sonar, for the far-edge points of the start (default 0)")
     ap.add_argument("--far-extent", type=float, default=10.0, metavar="M",
@@ -201,7 +203,7 @@ def main():
         pts = np.concatenate([pts] + [I.bank_points(p, r, top=args.bank_top) for p, r in zip(passes, r0)])
     n_bank = len(pts) - n_nadir
     n_far = 0
-    if args.far_edge:  # where a side's seabed ends for good, it has reached the water surface
+    if args.far_edge and not args.no_far_start:  # where a side's seabed ends for good, it has reached the water surface
         pts = np.concatenate([pts] + [I.far_edge_points(p, I.far_edge(p, theta, r), rise=args.far_rise)
                                       for p, r in zip(passes, r0)])
         n_far = len(pts) - n_nadir - n_bank

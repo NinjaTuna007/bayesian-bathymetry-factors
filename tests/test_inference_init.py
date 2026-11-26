@@ -153,3 +153,19 @@ def test_far_edge_finds_where_the_seabed_ends_for_good():
     e = I.far_edge(ps, th, r0)
     assert np.isnan(e[:, 0]).all()  # port fades with the grazing angle only
     assert np.all(np.abs(e[:, 1] - edge) < 1.0)  # the shadow at 15-17 m is no edge: the seabed comes back
+
+
+def test_first_echo_points_follow_the_pitch_of_the_ping_plane():
+    from bbf.ping import geometry as G
+
+    pitch, yaw, r = np.radians(6.0), np.radians(30.0), 17.0
+    ps = Pass(name="p", poses=np.array([[1.0, 2.0, -5.0, np.radians(3.0), pitch, yaw]]), y=np.ones((1, 2, 4)), dr=DR, t=np.zeros(1))
+    pt = I.first_echo_points(ps, np.array([[r, 12.0]]))[0]
+    v = pt - ps.poses[0, :3]
+    np.testing.assert_allclose(np.linalg.norm(v), r)
+    R = np.asarray(G.pose_frame(ps.poses[0])[1])
+    assert abs(v @ R[:, 0]) < 1e-9  # in the ping plane, whose normal is the sonar's x axis
+    np.testing.assert_allclose(-v[2], r * np.cos(pitch))  # the plane's steepest way down
+    np.testing.assert_allclose(v[:2], r * np.sin(pitch) * np.array([np.sin(yaw), np.cos(yaw)]), atol=1e-9)  # ahead, nose up
+    level = Pass(name="l", poses=np.array([[1.0, 2.0, -5.0, 0, 0, yaw]]), y=np.ones((1, 2, 4)), dr=DR, t=np.zeros(1))
+    np.testing.assert_allclose(I.first_echo_points(level, np.array([[r, 12.0]]))[0], [1.0, 2.0, -5.0 - r])
