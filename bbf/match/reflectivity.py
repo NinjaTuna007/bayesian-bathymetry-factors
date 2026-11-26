@@ -32,7 +32,7 @@ Joint estimation of a reflectivity map, the beam pattern and the elevation from 
 intensities under Lambert's law goes back to Coiras, Petillot and Lane (2007); here the map is
 a variable of the factor graph with a prior, estimated with the depths in one sparse system.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 
 import numpy as np
@@ -44,10 +44,15 @@ from bbf.prior.spde import precision
 
 @dataclass(frozen=True)
 class Reflectivity:
-    r"""Prior factor :math:`p(\xi)` of the log-reflectivity field: range :math:`\rho_\xi` (m), standard deviation :math:`\sigma_\xi`."""
+    r"""Prior factor :math:`p(\xi)` of the log-reflectivity field: range :math:`\rho_\xi` (m), standard deviation :math:`\sigma_\xi`.
+
+    mean (n,), if given, is the field's prior mean (default zero): with a small :math:`\sigma_\xi` it
+    holds the field at a known one, e.g. the truth of a synthetic test.
+    """
     mesh: Mesh
     rho: float
     sigma: float
+    mean: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     @cached_property
     def Lambda(self) -> sp.csc_matrix:
@@ -55,8 +60,9 @@ class Reflectivity:
 
     def log_density(self, xi: np.ndarray) -> float:
         r""":math:`\log p(\xi)`, up to a constant independent of :math:`\xi`."""
-        return -0.5 * float(xi @ (self.Lambda @ xi))
+        e = xi if self.mean is None else xi - self.mean
+        return -0.5 * float(e @ (self.Lambda @ e))
 
     def grad(self, xi: np.ndarray) -> np.ndarray:
         r"""Gradient of :meth:`log_density`."""
-        return -(self.Lambda @ xi)
+        return -(self.Lambda @ (xi if self.mean is None else xi - self.mean))

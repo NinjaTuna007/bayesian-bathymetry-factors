@@ -52,6 +52,53 @@ PSI_MAX_STEP = np.array([np.radians(3.0), np.radians(5.0), 0.1])
 PSI_LO = np.array([np.radians(5.0), np.radians(10.0), -1.0])
 PSI_HI = np.array([np.radians(85.0), np.radians(120.0), 2.0])
 
+COARSE_MAX_STEP = 2.0  # largest change of a vertex's depth (m) in one coarse step
+
+
+def coarse_basis(mesh, spacing: float) -> sp.csc_matrix:
+    r"""Bilinear interpolation :math:`P` (n, m) from a square grid of `spacing` m to the vertices; empty nodes dropped.
+
+    A depth change :math:`P c` moves whole patches of seabed together: the subspace of the coarse step.
+    """
+    v = np.asarray(mesh.vertices, dtype=float)
+    lo = v.min(axis=0)
+    t = (v - lo) / spacing
+    i0 = np.floor(t).astype(int)
+    f = t - i0
+    nx = int(i0[:, 0].max()) + 2
+    rows, cols, vals = [], [], []
+    for ax, wx in ((0, 1 - f[:, 0]), (1, f[:, 0])):
+        for ay, wy in ((0, 1 - f[:, 1]), (1, f[:, 1])):
+            rows.append(np.arange(len(v)))
+            cols.append((i0[:, 0] + ax) + nx * (i0[:, 1] + ay))
+            vals.append(wx * wy)
+    cols = np.concatenate(cols)
+    used, inv = np.unique(cols, return_inverse=True)
+    return sp.csc_matrix((np.concatenate(vals), (np.concatenate(rows), inv)), shape=(len(v), len(used)))
+
+
+def coarse_step(H, g, P, lay: dict, ridge: float = 1e-6) -> np.ndarray:
+    r"""Newton step (size,) in the depths :math:`P c`, the trend and the :math:`u`; the field and :math:`\psi` stay.
+
+    Solves :math:`Q^\top H Q\, q = Q^\top g` with :math:`Q = \operatorname{diag}(P, I_\beta, I_u)`, undamped but for a
+    relative ridge: the damping of the full step, which is on the diagonal of :math:`H`, holds back
+    directions whose curvature is small against that diagonal, and a smooth change of many depths
+    is one (each vertex's gradient is small, their sum is not).
+    """
+    n, ib, ip = lay["n"], lay["beta"], lay["psi"]
+    keep = np.concatenate([np.arange(n), np.arange(ib, ip)])
+    m = P.shape[1]
+    Q = sp.block_diag([P, sp.identity(ip - ib)], format="csc")
+    Hk = sp.csc_matrix(sp.csr_matrix(H)[keep][:, keep])
+    Hq = sp.csc_matrix(Q.T @ Hk @ Q)
+    Hq = Hq + sp.diags(ridge * np.maximum(Hq.diagonal(), 1e-12))
+    q = cho_factor(sp.csc_matrix(Hq)).solve(Q.T @ g[keep])
+    delta = np.zeros(lay["size"])
+    delta[:n] = P @ q[:m]
+    delta[ib:ip] = q[m:]
+    return delta
+
+
 def predicted_gain(H, g, delta, lay: dict) -> float:
     r""":math:`m(\delta)` of the module docstring for the part of delta outside :math:`u` (its :math:`u` part is ignored)."""
     iu, ip = lay["u"], lay["psi"]
@@ -64,7 +111,7 @@ def predicted_gain(H, g, delta, lay: dict) -> float:
 
 def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_depths: bool = False,
                  max_iter: int = 10, tol: float = 1e-5, lam: float = 1e-3, max_tries: int = 10, relin=None,
-                 log=print):
+                 coarse: float | None = None, log=print):
     r"""Ascend :math:`\ell` from (d, :math:`\beta`, :math:`\psi`, :math:`\xi`); returns (d, :math:`\beta`, :math:`\psi`, :math:`\xi`, history).
 
     J: per-ping-side Jacobians J[p][t][c], taken at the start (with the :math:`\xi` columns
@@ -73,6 +120,11 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     (d, :math:`\beta`) where they are and fit the rest, e.g. the reflectivity a seabed implies.
     relin: a function (d, :math:`\psi`, :math:`\xi`) returning (J, Jb) there, called after every accepted
     step; without it J and Jb stay frozen for the whole loop.
+    coarse: grid spacing (m) of a coarse step taken on every other iteration (from the first) in
+    place of the damped one (`coarse_step`): scaled so that no vertex moves more than
+    `COARSE_MAX_STEP`, halved up to three times until :math:`\ell` rises, and followed by the
+    damped step if it never does. Without it the large-scale shape stays where the start put it.
+
     Stops after `max_iter` accepted steps, when an accepted step raises :math:`\ell` by less than
     `tol` times :math:`|\ell|`, or when no damping within `max_tries` increases finds an ascent.
     Each history entry of an accepted step holds the gain the model predicted (`pred`) and the
@@ -97,6 +149,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     S0 = det["S"] if field else None  # J is taken at the start: with the field its rows follow S (`ggn.assemble`)
     prior_diag = problem.prior.joint_precision().diagonal()[:n]
     psi_limit = np.tile(PSI_MAX_STEP, 2)
+    P = coarse_basis(problem.mesh, coarse) if coarse is not None and not hold_depths else None
     history: list[dict] = [{"ell": ell, "lam": lam, "step": 0.0, "time": 0.0}]
     log(f"  GN start: ell = {ell:.1f}")
     for it in range(max_iter):
@@ -121,9 +174,26 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             scale[ip:ip + 6] = np.abs(g[ip:ip + 6]) / psi_limit
         accepted, new, pred, trial = False, ell, 0.0, {}
         dd, db, dp, dx = np.zeros(n), np.zeros(nb), np.zeros((2, 3)), np.zeros(n)
+        kind = "GN"
+        if P is not None and it % 2 == 0:
+            try:
+                delta = coarse_step(H, g, P, lay)
+            except CholmodNotPositiveDefiniteError:
+                delta = None
+            if delta is not None:
+                delta *= min(1.0, COARSE_MAX_STEP / max(float(np.max(np.abs(delta[:n]))), 1e-12))
+                for _ in range(4):
+                    pred = predicted_gain(H, g, delta, lay)
+                    new = value(problem, d + delta[:n], beta + delta[ib:ib + nb], Fw, u0=det["u"], psi=psi, keep=trial, xi=xi)
+                    if np.isfinite(new) and new > ell:
+                        accepted, kind = True, "coarse"
+                        dd, db = delta[:n], delta[ib:ib + nb]
+                        break
+                    delta *= 0.5
+        used_lam = lam
         tries = 0  # rejected steps; raising lambda into the limits does not count
         for _ in range(6 * max_tries):
-            if tries >= max_tries:
+            if accepted or tries >= max_tries:
                 break
             Hd = sp.csc_matrix(H + sp.diags(lam * scale))
             if not move.all():
@@ -170,7 +240,9 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
         if relin is not None and field:
             S0 = det["S"]
         used = lam
-        if rho < 0.25:
+        if kind == "coarse":
+            lam = used_lam  # the damping belongs to the full step
+        elif rho < 0.25:
             lam *= 4.0
         elif rho > 0.75:
             lam = max(lam / 3.0, 1e-8)
@@ -182,6 +254,8 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
                  f"g1 {psi[:, 2].round(3)} dB/m") if free else ""
         if field:
             extra += f", xi sd {xi.std():.2f}"
+        if kind == "coarse":
+            extra += f", coarse, rms dd {float(np.sqrt(np.mean(dd**2))):.3f} m"
         log(f"  GN {it}: ell = {ell:.1f} (+{gain:.1f}, predicted +{pred:.1f}, ratio {rho:.2f}), max |dd| = {step:.3f} m, "
             f"lambda = {used:.1e}{extra}, {time.time() - t0:.0f}s")
         if gain < tol * abs(ell):
