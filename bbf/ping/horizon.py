@@ -97,11 +97,15 @@ class Horizon:
     row_tol: float = ROW_TOL
 
 
-def scored_blocks(labels, valid, r0, block_dr: float, max_gap: float = MAX_GAP) -> list[np.ndarray]:
+def scored_blocks(labels, valid, r0, block_dr: float, max_gap: float = MAX_GAP, far=None,
+                  far_extent: float = 10.0) -> list[np.ndarray]:
     """Per pass (n, 2, n_blocks): valid blocks past the first echo that are lit, or dark with lit seabed within max_gap beyond.
 
     labels: per pass (n, 2, n_blocks); valid: per pass, same shape, or None; r0: per pass (n, 2)
-    first echoes (NaN: from the first lit block on).
+    first echoes (NaN: from the first lit block on). far: per pass (n, 2) far edges
+    (`bbf.inference.init.far_edge`, NaN: none), or None; the dark blocks within `far_extent` m
+    beyond a far edge are scored too, although no lit seabed follows them: there the intensity
+    collapsed for good, which a beam fading at far range does not do.
     """
     out = []
     for p, lab in enumerate(labels):
@@ -120,6 +124,9 @@ def scored_blocks(labels, valid, r0, block_dr: float, max_gap: float = MAX_GAP) 
         nxt = np.concatenate([nxt[..., 1:], np.full(nxt.shape[:-1] + (1,), nb)], axis=-1)
         closed = (nxt < nb) & ((nxt - np.arange(nb)) * block_dr <= max_gap)
         use = past & (lab | closed)
+        if far is not None:
+            fe = np.asarray(far[p], dtype=float)[..., None]
+            use |= past & ~lab & (rb >= fe) & (rb < fe + far_extent)
         if valid is not None:
             use &= np.asarray(valid[p], dtype=bool)
         out.append(use)

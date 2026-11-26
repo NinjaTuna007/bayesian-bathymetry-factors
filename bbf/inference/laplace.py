@@ -45,13 +45,18 @@ def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=Non
     r"""Posterior standard deviations at the mode (d, :math:`\beta`, :math:`\psi`, :math:`\xi`) with frozen Jacobians J (and Jb).
 
     Returns the depth standard deviations (n,), those of :math:`\beta` (3, or 1),, of :math:`\psi` (2, 3)
-    when it is free, of :math:`\xi` (n,) when the problem has the field, and the augmented
+    when it is free (zero for its held components), of :math:`\xi` (n,) when the problem has the field, and the augmented
     precision H it came from (undamped).
     """
     _, _, det = value_and_grad(problem, d, beta, psi=psi, xi=xi)
-    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, fr=det["first_return"], hz=det["horizon"])
-    var = marginal_variances(H, n_samples, rng)
+    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, fr=det["first_return"], hz=det["horizon"],
+                     prior=problem.prior.at(d, beta))
     lay = ggn.layout(problem)
+    free = np.ones(lay["size"], bool)
+    if problem.free_psi and problem.psi_held is not None:
+        free[lay["psi"]:lay["psi"] + 6] = ~np.asarray(problem.psi_held, bool).ravel()
+    var = np.zeros(lay["size"])  # held sonar parameters are known: no variance, and conditioned on
+    var[free] = marginal_variances(sp.csr_matrix(H)[free][:, free], n_samples, rng)
     n, ib, ip = lay["n"], lay["beta"], lay["psi"]
     out = {"sd_d": np.sqrt(var[:n]), "sd_beta": np.sqrt(var[ib:ib + lay["n_beta"]]), "H": H}
     if problem.refl is not None:

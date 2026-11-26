@@ -1,0 +1,9 @@
+[17:14:42] 1 states; scoring every 10-th ping (200 pings)
+[17:14:46] wrote figs/compare_fx/profiles.png
+[17:14:49] fixes: first-echo residual A port: median -0.02 m, |res| < 0.3 m on 43%
+[17:14:49] fixes: first-echo residual A stbd: median -2.36 m, |res| < 0.3 m on 7%
+[17:14:49] fixes: first-echo residual B port: median -0.04 m, |res| < 0.3 m on 92%
+[17:14:49] fixes: first-echo residual B stbd: median -0.04 m, |res| < 0.3 m on 92%
+[17:15:05] fixes: log density per bin -26.9354 at k = 3 over 428400 bins (held out); echo bins: gamma about the mean -33.3426 (shape 0.05); var log(y / mean) 1.65
+[17:22:14] fixes: per-pass fields differ by sd 1.49 (IQR sd 1.18; correlation +0.24) over 7953 shared vertices
+[17:22:14] wrote figs/compare_fx/compare.json

@@ -1,0 +1,9 @@
+[16:56:16] 1 states; scoring every 10-th ping (200 pings)
+[16:56:19] wrote figs/compare_fr2/profiles.png
+[16:56:22] fr2: first-echo residual A port: median +0.03 m, |res| < 0.3 m on 39%
+[16:56:22] fr2: first-echo residual A stbd: median -2.17 m, |res| < 0.3 m on 10%
+[16:56:22] fr2: first-echo residual B port: median +0.04 m, |res| < 0.3 m on 86%
+[16:56:22] fr2: first-echo residual B stbd: median +0.00 m, |res| < 0.3 m on 85%
+[16:56:38] fr2: log density per bin -28.5222 at k = 3 over 428400 bins (in sample); echo bins: gamma about the mean -31.6915 (shape 0.10); var log(y / mean) 1.76
+[17:04:17] fr2: per-pass fields differ by sd 1.04 (IQR sd 0.88; correlation +0.04) over 8279 shared vertices
+[17:04:17] wrote figs/compare_fr2/compare.json

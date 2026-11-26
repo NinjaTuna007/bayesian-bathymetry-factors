@@ -1,0 +1,54 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[13:47:37] start: data -10893225, first return -7458, prior d -192, xi -20841; first-return residual median (A port, A stbd, B port, B stbd) [-0.09 -2.32 -0.03 -0.07] m, within 0.3 m [0.36 0.04 0.87 0.91]
+[13:47:37] name: change of data / first return / prior d / prior xi / prior psi; sd and max of the depth move; xi sd; psi (centre, width deg; g1); first-return medians; within 0.3 m
+[13:47:47] base       {}
+[13:47:47]     data    +85933  fr    +301  prior d    -145  xi   +3111  psi  -2.8 | move sd 0.21 max 3.67 m | xi sd 1.33 | beam [54.4 59. ]/[30.  48.7] g1 [0.645 0.038] | res [ 0.01 -2.3   0.01 -0.03] in [0.36 0.07 0.85 0.92]
+[13:47:47]       step 0: lam 1.0e-03 actual   +22748.4 predicted   +57888.1 ratio  0.39 shorten     6.7 scale   1.0 clipped   1388 raw max   540.9 m cold-warm    +2177
+[13:47:47]       step 1: lam 3.3e-04 actual   +30045.6 predicted   +15966.9 ratio  1.88 shorten    96.1 scale   1.0 clipped    127 raw max   348.7 m cold-warm   -22840
+[13:47:47]       step 2: lam 1.1e-04 actual    +2017.4 predicted   +14239.1 ratio  0.14 shorten   224.7 scale   1.0 clipped     82 raw max   415.5 m cold-warm    -6459
+[13:47:47]       step 3: lam 3.7e-05 actual   +34318.5 predicted   +17888.8 ratio  1.92 shorten   421.8 scale   1.0 clipped     92 raw max   681.8 m cold-warm   -17187
+[13:47:47]       step 4: lam 1.2e-05 actual   +13222.3 predicted   +24362.6 ratio  0.54 shorten   665.0 scale   1.0 clipped      0 raw max   318.8 m cold-warm    -4719
+[13:47:47]       step 5: lam 4.1e-06 actual   +31494.1 predicted   +34276.1 ratio  0.92 shorten  1091.9 scale   1.0 clipped      0 raw max   236.7 m cold-warm    -7361
+[13:48:01] nocap      {'clip': 'none', 'shorten': '0'}
+[13:48:01]     data    -24343  fr    +461  prior d    -538  xi   +1415  psi  -1.9 | move sd 0.09 max 11.34 m | xi sd 1.38 | beam [50.7 57. ]/[53.7 33.7] g1 [0.658 0.05 ] | res [-0.05 -2.31 -0.02 -0.03] in [0.4  0.06 0.89 0.91]
+[13:48:01]       step 0: lam 1.0e+00 actual   +31827.7 predicted   +86141.0 ratio  0.37 shorten     1.0 scale   1.0 clipped     65 raw max    11.3 m cold-warm    +6206
+[13:48:13] psifix     {'psi': 'fixed'}
+[13:48:13]     data   +101700  fr   -1614  prior d   -7496  xi   -1151  psi  +0.0 | move sd 0.43 max 6.00 m | xi sd 1.48 | beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] | res [ 0.43 -1.55  0.34  0.21] in [0.3  0.18 0.45 0.53]
+[13:48:13]       step 0: lam 1.0e-03 actual    +4480.9 predicted  -236646.2 ratio   nan shorten     1.0 scale   1.0 clipped   8700 raw max   540.8 m cold-warm    -1341
+[13:48:13]       step 1: lam 3.3e-01 actual   +43063.0 predicted  +216078.3 ratio  0.20 shorten     1.0 scale   1.0 clipped   2700 raw max   244.9 m cold-warm   -17030
+[13:48:13]       step 2: lam 1.1e-01 actual    +4371.4 predicted  +198011.1 ratio  0.02 shorten     1.0 scale   1.0 clipped   4899 raw max   453.3 m cold-warm    -7751
+[13:48:13]       step 3: lam 3.7e-01 actual   +48698.4 predicted  +249459.6 ratio  0.20 shorten     1.0 scale   1.0 clipped   2208 raw max   130.2 m cold-warm   -21535
+[13:48:13]       step 4: lam 1.2e+00 actual   +46943.3 predicted  +114562.9 ratio  0.41 shorten     1.0 scale   1.0 clipped    604 raw max    86.1 m cold-warm   -35631
+[13:48:13]       step 5: lam 4.1e-01 actual   +15428.0 predicted  +106798.1 ratio  0.14 shorten     1.0 scale   1.0 clipped   1206 raw max   200.8 m cold-warm   -37301
+[13:48:25] grid       {'psi': 'fixed', 'grid': '49', 'shadow_stop': '0'}
+[13:48:25]     data   +226184  fr   -1116  prior d   -6381  xi   +1218  psi  +0.0 | move sd 0.35 max 6.00 m | xi sd 1.35 | beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] | res [ 0.62 -1.46  0.27  0.12] in [0.31 0.16 0.51 0.66]
+[13:48:25]       step 0: lam 1.0e-02 actual   +93231.5 predicted  -150533.7 ratio   nan shorten     1.0 scale   1.0 clipped   5998 raw max   760.8 m cold-warm      +88
+[13:48:25]       step 1: lam 3.3e-01 actual   +32806.7 predicted  +380052.7 ratio  0.09 shorten     1.0 scale   1.0 clipped   3706 raw max   623.8 m cold-warm       +0
+[13:48:25]       step 2: lam 1.1e+00 actual   +40388.6 predicted  +246465.7 ratio  0.16 shorten     1.0 scale   1.0 clipped   1120 raw max  5745.4 m cold-warm      +53
+[13:48:25]       step 3: lam 3.7e-01 actual   +12241.1 predicted  +132176.2 ratio  0.09 shorten     1.0 scale   1.0 clipped   1579 raw max   136.0 m cold-warm       +0
+[13:48:25]       step 4: lam 1.2e+00 actual   +27205.4 predicted  +105484.9 ratio  0.26 shorten     1.0 scale   1.0 clipped    608 raw max   784.3 m cold-warm       +0
+[13:48:25]       step 5: lam 4.1e+00 actual   +14032.6 predicted   +34920.2 ratio  0.40 shorten     1.0 scale   1.0 clipped    104 raw max     9.2 m cold-warm       +0
+[13:48:36] lm         {'psi': 'fixed', 'grid': '49', 'shadow_stop': '0', 'ratio': '1', 'floor': '0.5', 'clip': 'scale', 'relin': '1'}
+[13:48:36]     data   +102923  fr    +184  prior d     -42  xi   +2154  psi  +0.0 | move sd 0.06 max 3.73 m | xi sd 1.30 | beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] | res [-0.07 -2.24 -0.03 -0.06] in [0.37 0.05 0.88 0.91]
+[13:48:36]       step 0: lam 1.0e-03 actual    +2096.5 predicted    +6153.8 ratio  0.34 shorten     1.0 scale 681.5 clipped      0 raw max   681.5 m cold-warm       +0
+[13:48:36]       step 1: lam 1.0e-03 actual    +8974.5 predicted   +11304.9 ratio  0.79 shorten     1.0 scale 187.5 clipped      0 raw max   187.5 m cold-warm       +0
+[13:48:36]       step 2: lam 3.3e-04 actual   +29372.7 predicted   +30659.1 ratio  0.96 shorten     1.0 scale  56.2 clipped      0 raw max    56.2 m cold-warm       +0
+[13:48:36]       step 3: lam 1.1e-04 actual   +25085.2 predicted   +26529.2 ratio  0.95 shorten     1.0 scale  59.4 clipped      0 raw max    59.4 m cold-warm       +0
+[13:48:36]       step 4: lam 3.7e-05 actual   +24769.3 predicted   +26102.7 ratio  0.95 shorten     1.0 scale  48.8 clipped      0 raw max    48.8 m cold-warm       +0
+[13:48:36]       step 5: lam 1.2e-05 actual   +14920.6 predicted   +15577.3 ratio  0.96 shorten     1.0 scale  65.6 clipped      0 raw max    65.6 m cold-warm       +0
+[13:48:46] tr         {'psi': 'fixed', 'grid': '49', 'shadow_stop': '0', 'ratio': '1', 'floor': '0.5', 'clip': 'trust', 'relin': '1'}
+[13:48:46]     data   +231286  fr    +525  prior d    -181  xi   +4945  psi  +0.0 | move sd 0.04 max 1.18 m | xi sd 1.33 | beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] | res [-0.02 -2.26 -0.01 -0.02] in [0.42 0.04 0.89 0.92]
+[13:48:46]       step 0: lam 2.0e+00 actual   +62966.0 predicted   +83370.4 ratio  0.76 shorten     1.0 scale   1.0 clipped      0 raw max     0.5 m cold-warm       +0
+[13:48:46]       step 1: lam 6.8e-01 actual   +78254.3 predicted   +95011.5 ratio  0.82 shorten     1.0 scale   1.0 clipped      0 raw max     0.5 m cold-warm       +0
+[13:48:46]       step 2: lam 9.1e-01 actual   +36479.4 predicted   +46799.3 ratio  0.78 shorten     1.0 scale   1.0 clipped      0 raw max     0.4 m cold-warm       +0
+[13:48:46]       step 3: lam 1.2e+00 actual   +20760.1 predicted   +21127.0 ratio  0.98 shorten     1.0 scale   1.0 clipped      0 raw max     0.3 m cold-warm       +0
+[13:48:46]       step 4: lam 8.1e-01 actual   +17919.9 predicted   +18241.5 ratio  0.98 shorten     1.0 scale   1.0 clipped      0 raw max     1.0 m cold-warm       +0
+[13:48:46]       step 5: lam 2.7e-01 actual   +20194.5 predicted   +18712.3 ratio  1.08 shorten     1.0 scale   1.0 clipped      0 raw max     0.4 m cold-warm       +0
+[13:48:57] t02tr      {'psi': 'fixed', 'grid': '49', 'shadow_stop': '0', 'ratio': '1', 'floor': '0.5', 'clip': 'trust', 'relin': '1', 'temper': '0.02'}
+[13:48:57]     data    +53661  fr   +1346  prior d     -96  xi  +19139  psi  +0.0 | move sd 0.04 max 1.01 m | xi sd 0.68 | beam [50. 50.]/[60. 60.] g1 [0.65 0.  ] | res [ 0.02 -2.14  0.02  0.01] in [0.5  0.07 0.93 0.94]
+[13:48:57]       step 0: lam 1.0e+00 actual    +1202.2 predicted    +4917.6 ratio  0.24 shorten     1.0 scale   1.0 clipped      0 raw max     0.8 m cold-warm       -0
+[13:48:57]       step 1: lam 4.1e+00 actual     +470.0 predicted    +1623.0 ratio  0.29 shorten     1.0 scale   1.0 clipped      0 raw max     0.2 m cold-warm       -0
+[13:48:57]       step 2: lam 4.1e+00 actual     +300.4 predicted    +1589.7 ratio  0.19 shorten     1.0 scale   1.0 clipped      0 raw max     0.2 m cold-warm       -0
+[13:48:57]       step 3: lam 1.6e+01 actual     +203.8 predicted     +538.0 ratio  0.38 shorten     1.0 scale   1.0 clipped      0 raw max     0.1 m cold-warm       +0
+[13:48:57]       step 4: lam 1.6e+01 actual     +137.1 predicted     +646.9 ratio  0.21 shorten     1.0 scale   1.0 clipped      0 raw max     0.1 m cold-warm       +0
+[13:48:57]       step 5: lam 6.6e+01 actual      +92.3 predicted     +162.1 ratio  0.57 shorten     1.0 scale   1.0 clipped      0 raw max     0.0 m cold-warm       +0

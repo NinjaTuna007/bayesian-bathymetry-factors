@@ -1,0 +1,73 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-af17dc724744bfbb3' is dirty
+[15:50:46] pass B: texture peak +0.20 (9.1 sd; +0.05 unmoved) at (-2.56, +0.10) m east, north: moved
+[15:50:46] 1801 pings in 2 passes; mesh 124184 vertices, z_ref 56.39
+[15:50:46] first echoes found on 97.8% of ping-sides
+[15:51:05] first-echo start: 1801 points below the tracks and 0 on banks, trend [21.378], depth 21.3..21.4 m
+[15:51:06] level k = 27: 142 bins of 35.6 cm, 426 samples per side
+[15:52:18]   GN start: ell = -10330482.3
+[15:55:32]   GN 0: ell = -10217051.2 (+113431.1, predicted +101846.2, ratio 1.11), max |dd| = 0.000 m, lambda = 1.0e+00, xi sd 0.25, 194s
+[15:56:54]   GN 1: ell = -10165089.2 (+51962.0, predicted +43164.6, ratio 1.20), max |dd| = 0.000 m, lambda = 1.4e+00, xi sd 0.37, 81s
+[15:57:26]   GN 2: ell = -10135112.0 (+29977.1, predicted +25037.8, ratio 1.20), max |dd| = 0.000 m, lambda = 1.8e+00, xi sd 0.45, 32s
+[15:57:50]   GN 3: ell = -10107163.9 (+27948.1, predicted +22612.3, ratio 1.24), max |dd| = 0.000 m, lambda = 1.2e+00, xi sd 0.54, 24s
+[15:58:18]   GN 4: ell = -10090122.8 (+17041.1, predicted +13776.3, ratio 1.24), max |dd| = 0.000 m, lambda = 1.6e+00, xi sd 0.59, 28s
+[15:58:44]   GN 5: ell = -10073020.1 (+17102.7, predicted +13251.9, ratio 1.29), max |dd| = 0.000 m, lambda = 1.1e+00, xi sd 0.65, 26s
+[15:59:10]   GN 6: ell = -10061782.2 (+11237.9, predicted +8989.9, ratio 1.25), max |dd| = 0.000 m, lambda = 1.4e+00, xi sd 0.69, 26s
+[15:59:39]   GN 7: ell = -10050229.6 (+11552.6, predicted +8593.7, ratio 1.34), max |dd| = 0.000 m, lambda = 9.6e-01, xi sd 0.74, 29s
+[16:00:14]   GN 8: ell = -10042076.8 (+8152.8, predicted +6208.4, ratio 1.31), max |dd| = 0.000 m, lambda = 1.3e+00, xi sd 0.77, 35s
+[16:00:42]   GN 9: ell = -10035973.2 (+6103.6, predicted +4813.8, ratio 1.27), max |dd| = 0.000 m, lambda = 1.7e+00, xi sd 0.79, 28s
+[16:01:07]   GN 10: ell = -10028916.1 (+7057.1, predicted +5230.5, ratio 1.35), max |dd| = 0.000 m, lambda = 1.1e+00, xi sd 0.82, 25s
+[16:01:35]   GN 11: ell = -10023657.5 (+5258.6, predicted +4109.1, ratio 1.28), max |dd| = 0.000 m, lambda = 1.5e+00, xi sd 0.84, 28s
+[16:02:10]   GN 12: ell = -10017884.6 (+5772.9, predicted +4306.7, ratio 1.34), max |dd| = 0.000 m, lambda = 1.0e+00, xi sd 0.86, 34s
+[16:02:42]   GN 13: ell = -10013357.1 (+4527.6, predicted +3434.7, ratio 1.32), max |dd| = 0.000 m, lambda = 1.3e+00, xi sd 0.88, 32s
+[16:03:09]   GN 14: ell = -10008347.8 (+5009.2, predicted +3752.0, ratio 1.34), max |dd| = 0.000 m, lambda = 9.0e-01, xi sd 0.90, 27s
+[16:03:56]   GN 15: ell = -10004623.2 (+3724.6, predicted +2861.4, ratio 1.30), max |dd| = 0.000 m, lambda = 1.2e+00, xi sd 0.91, 47s
+[16:04:25]   GN 16: ell = -10000371.0 (+4252.3, predicted +3118.1, ratio 1.36), max |dd| = 0.000 m, lambda = 8.0e-01, xi sd 0.93, 29s
+[16:05:37]   GN 17: ell = -9996956.3 (+3414.7, predicted +2706.5, ratio 1.26), max |dd| = 0.000 m, lambda = 1.1e+00, xi sd 0.94, 71s
+[16:05:37] round 0: reflectivity at the start depths, sd 0.94
+[16:05:39] round 0: shape L 6.69, spike rates [0.377 0.399]
+[16:05:57] round 0: theta fit (converged True): eta [9.12789326e+11 2.46644818e+13], zeta [3.14437803e+09 3.19190102e+09], ell [1.95608505 1.81563366], log kappa [39.09776376 37.05097664] ± [0.77041065 1.62816721]
+[16:06:04] round 0: Jacobians in 7s
+[16:06:35]   GN start: ell = -9856995.5
+[16:09:30]   GN 0: ell = -9829582.5 (+27413.0, predicted +23850.8, ratio 1.15), max |dd| = 0.877 m, lambda = 1.0e+00, xi sd 0.96, 175s
+[16:11:45]   GN 1: ell = -9813206.3 (+16376.2, predicted +19016.4, ratio 0.86), max |dd| = 0.723 m, lambda = 1.4e+00, xi sd 0.97, 135s
+[16:13:56]   GN 2: ell = -9798175.0 (+15031.3, predicted +13953.6, ratio 1.08), max |dd| = 0.616 m, lambda = 9.1e-01, xi sd 0.99, 131s
+[16:15:38]   GN 3: ell = -9788056.1 (+10118.9, predicted +8807.4, ratio 1.15), max |dd| = 0.686 m, lambda = 1.2e+00, xi sd 1.00, 103s
+[16:16:46]   GN 4: ell = -9781448.4 (+6607.7, predicted +7828.2, ratio 0.84), max |dd| = 0.610 m, lambda = 1.6e+00, xi sd 1.00, 67s
+[16:17:23]   GN 5: ell = -9770928.0 (+10520.5, predicted +8953.4, ratio 1.18), max |dd| = 0.325 m, lambda = 5.4e-01, xi sd 1.02, 37s
+[16:17:23] level k = 27 done: trend [21.325]; beam centre [50. 50.], width [60. 60.] deg; shape 6.69, spike rates [0.377 0.399]
+[16:17:23] level k = 9: 427 bins of 11.9 cm, 1281 samples per side
+[16:18:23] round 0: shape L 2.31, spike rates [0.25  0.331]
+[16:19:16] round 0: theta fit (converged True): eta [1.38286808e+12 3.00677363e+13], zeta [9.42634321e+09 9.57570990e+09], ell [1.94886986 1.81566401], log kappa [39.1355031  37.20770391] ± [0.64209878 1.40533117]
+[16:19:35] round 0: Jacobians in 19s
+[16:20:19]   GN start: ell = -28819218.0
+[16:23:22]   GN 0: ell = -28705143.3 (+114074.6, predicted +98037.1, ratio 1.16), max |dd| = 0.363 m, lambda = 1.0e+00, xi sd 1.04, 183s
+[16:24:33]   GN 1: ell = -28622948.3 (+82195.0, predicted +62869.3, ratio 1.31), max |dd| = 0.379 m, lambda = 6.8e-01, xi sd 1.07, 71s
+[16:26:13]   GN 2: ell = -28587138.2 (+35810.0, predicted +34636.2, ratio 1.03), max |dd| = 0.393 m, lambda = 1.8e+00, xi sd 1.09, 100s
+[16:27:24]   GN 3: ell = -28549795.1 (+37343.1, predicted +29183.3, ratio 1.28), max |dd| = 0.118 m, lambda = 1.2e+00, xi sd 1.12, 71s
+[16:28:34]   GN 4: ell = -28514359.6 (+35435.5, predicted +28786.0, ratio 1.23), max |dd| = 0.257 m, lambda = 8.1e-01, xi sd 1.15, 70s
+[16:29:58]   GN 5: ell = -28489738.4 (+24621.2, predicted +20515.7, ratio 1.20), max |dd| = 0.206 m, lambda = 1.1e+00, xi sd 1.17, 85s
+[16:29:58] level k = 9 done: trend [21.325]; beam centre [50. 50.], width [60. 60.] deg; shape 2.31, spike rates [0.25  0.331]
+[16:29:59] level k = 3: 1280 bins of 4.0 cm, 3840 samples per side
+[16:31:39] round 0: shape L 1.63, spike rates [0.194 0.193]
+[16:32:57] round 0: theta fit (converged True): eta [1.66124781e+12 4.86570512e+13], zeta [2.82351389e+10 2.87271224e+10], ell [1.93276976 1.81569158], log kappa [38.96259246 37.63145538] ± [0.56496792 1.12374833]
+[16:33:35] round 0: Jacobians in 38s
+[16:35:00]   GN start: ell = -85588179.0
+[16:39:23]   GN 0: ell = -85451211.8 (+136967.2, predicted +113370.0, ratio 1.21), max |dd| = 0.298 m, lambda = 1.0e+00, xi sd 1.20, 262s
+[16:42:00]   GN 1: ell = -85356141.2 (+95070.6, predicted +78024.9, ratio 1.22), max |dd| = 0.288 m, lambda = 1.4e+00, xi sd 1.22, 157s
+[16:44:27]   GN 2: ell = -85268447.9 (+87693.4, predicted +70489.3, ratio 1.24), max |dd| = 0.261 m, lambda = 9.1e-01, xi sd 1.25, 147s
+[16:47:19]   GN 3: ell = -85214006.2 (+54441.7, predicted +46480.3, ratio 1.17), max |dd| = 0.297 m, lambda = 1.2e+00, xi sd 1.27, 172s
+[16:50:09]   GN 4: ell = -85176729.3 (+37276.9, predicted +42940.5, ratio 0.87), max |dd| = 0.613 m, lambda = 1.6e+00, xi sd 1.29, 170s
+[16:52:31]   GN 5: ell = -85137931.1 (+38798.2, predicted +33147.6, ratio 1.17), max |dd| = 0.315 m, lambda = 1.1e+00, xi sd 1.30, 141s
+[16:53:46] round 1: theta fit (converged True): eta [1.63371903e+12 6.89065187e+13], zeta [2.82189899e+10 2.87271077e+10], ell [1.92681057 1.81569145], log kappa [38.83973503 37.88912292] ± [0.5341154  0.89556385]
+[16:54:18] round 1: Jacobians in 32s
+[16:55:30]   GN start: ell = -85136230.5
+[16:59:19]   GN 0: ell = -85103341.8 (+32888.7, predicted +29246.8, ratio 1.12), max |dd| = 0.296 m, lambda = 1.0e+00, xi sd 1.32, 229s
+[17:01:37]   GN 1: ell = -85074466.7 (+28875.1, predicted +27792.5, ratio 1.04), max |dd| = 0.472 m, lambda = 6.8e-01, xi sd 1.33, 138s
+[17:04:08]   GN 2: ell = -85055673.4 (+18793.3, predicted +20304.6, ratio 0.93), max |dd| = 0.360 m, lambda = 9.1e-01, xi sd 1.34, 151s
+[17:06:30]   GN 3: ell = -85042516.0 (+13157.4, predicted +13527.2, ratio 0.97), max |dd| = 0.296 m, lambda = 1.2e+00, xi sd 1.35, 142s
+[17:08:41]   GN 4: ell = -85026855.8 (+15660.2, predicted +13328.8, ratio 1.17), max |dd| = 0.139 m, lambda = 8.1e-01, xi sd 1.36, 131s
+[17:11:03]   GN 5: ell = -85014158.8 (+12697.0, predicted +12785.9, ratio 0.99), max |dd| = 0.296 m, lambda = 1.1e+00, xi sd 1.36, 141s
+[17:13:14] Laplace: depth sd median 7.30 m in 131s
+[17:13:14] level k = 3 done: trend [21.324]; beam centre [50. 50.], width [60. 60.] deg; shape 1.63, spike rates [0.194 0.193]
+[17:13:14] wrote runs/fx.npz; total 83 min
+[17:13:28] wrote map

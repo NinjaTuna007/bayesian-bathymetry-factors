@@ -1,0 +1,66 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[13:47:33] theta fit: eta [1.14559849e+06 6.26378285e+12], zeta [5.86867806e+11 5.53798724e+08], ell [19.27559917  1.50570978], log kappa [38.4817798  39.15000568] ± [0.80679212 1.34445173]
+[13:48:17] k=9 k27: ell -29100584.8, data -29075357.9, first return -7157.3
+[13:48:47] gradient in psi (per radian, radian, dB/m): exact total, of which prior, ping bins (from scores), rest (shadow, Laplace)
+[13:48:47]   port centre  total    +425735.3  prior       -2.5  ping bins    -498407.0  rest    +924144.9
+[13:48:47]   port width   total    -533252.4  prior       +7.6  ping bins    +453491.9  rest    -986751.9
+[13:48:47]   port g1      total    +704393.2  prior       +0.0  ping bins    +704744.9  rest       -351.7
+[13:48:47]   stbd centre  total     -18724.5  prior       -5.2  ping bins     -79411.9  rest     +60692.5
+[13:48:47]   stbd width   total     -13659.5  prior       +2.8  ping bins     +30157.5  rest     -43819.9
+[13:48:47]   stbd g1      total    +282275.8  prior       -0.2  ping bins    +282078.6  rest       +197.3
+[13:48:47] ping-bin gradient by pass, side and range band: bins, d/d centre, d/d width, d/d g1, mean (y/I - 1) of main bins
+[13:48:47]   A port  0-15 m    35324         +0.0        +0.0    +36455.6   +1.936
+[13:48:47]   A port 15-20 m    10667     +29884.1    +28967.2    +45333.8   +0.539
+[13:48:47]   A port 20-25 m    43195     -39541.9     -5524.7   -113673.6   -0.111
+[13:48:47]   A port 25-30 m    46044     +36710.7    -10803.2   -252849.8   -0.214
+[13:48:47]   A port 30-40 m    71683    -149246.4   +102676.1   +233466.8   +0.143
+[13:48:47]   A port 40-60 m    44763    -265176.2   +240083.3   +377783.5   +0.477
+[13:48:47]   A stbd  0-15 m    11733       -196.7      -107.8    +81171.9   +2.432
+[13:48:47]   A stbd 15-20 m    31902      +1652.4     +1216.3   +222933.4   +0.277
+[13:48:47]   A stbd 20-25 m    50394      +1626.9      +575.6   +112792.4   +0.016
+[13:48:47]   A stbd 25-30 m    50400      -8660.9     +1203.0     +6947.8   +0.087
+[13:48:47]   A stbd 30-40 m   100800     +22350.1    -15573.4   -175081.2   -0.002
+[13:48:47]   A stbd 40-60 m   105600     +51673.3    -28002.6   -150906.2   -0.032
+[13:48:47]   B port  0-15 m    24184         +0.0        +0.0    +11502.4   +1.961
+[13:48:47]   B port 15-20 m        4         +0.0        +0.0       +12.3   +1.690
+[13:48:47]   B port 20-25 m    23426      -5446.4     +1645.5    -51763.1   -0.085
+[13:48:47]   B port 25-30 m    33539      +4505.3      -770.7   +209640.9   -0.104
+[13:48:47]   B port 30-40 m    50939      +1259.9     -2305.0    +75392.4   -0.001
+[13:48:47]   B port 40-60 m    21765    -111356.2    +99523.4   +133443.7   +0.517
+[13:48:47]   B stbd  0-15 m     7192         +0.0        +0.0    +64156.4   +2.507
+[13:48:47]   B stbd 15-20 m     5837         +0.0        +0.0   +125645.3   +2.470
+[13:48:47]   B stbd 20-25 m    24436     -22721.1     -5867.2   -113578.8   -0.210
+[13:48:47]   B stbd 25-30 m    33642     +11466.1     -1766.7   -118713.3   -0.137
+[13:48:47]   B stbd 30-40 m    67284     -39271.3    +17816.3    +58234.2   +0.076
+[13:48:47]   B stbd 40-60 m    70488     -97330.7    +60663.9   +168476.6   +0.097
+[13:48:58] psi in the GGN as groups are eliminated: marginal sd (deg, deg, dB/m), and the Newton step g/S of psi alone
+[13:48:58]   eliminated none    : sd [0.01  0.014 0.    0.033 0.065 0.   ]; eigenvalues in prior units [   42654.6   172154.2   752334.3  1698564.2 13523799.9 32474916.4]
+[13:48:58]   eliminated u       : sd [0.011 0.014 0.    0.041 0.066 0.001]; eigenvalues in prior units [  40526.4   79221.8  634748.4 1050341.8 2189265.8 2518957.4]
+[13:49:02]   eliminated u+xi    : sd [0.061 0.069 0.001 0.208 0.299 0.001]; eigenvalues in prior units [  1730.8   3470.7  71917.  116492.7 196250.5 633709. ]
+[13:49:07]   eliminated u+d     : sd [0.014 0.017 0.001 0.058 0.106 0.001]; eigenvalues in prior units [  18985.    28455.5  422904.2  664879.3 1320625.7 1689953.8]
+[13:49:19]   eliminated u+xi+d  : sd [0.07  0.08  0.001 0.227 0.337 0.001]; eigenvalues in prior units [  1474.1   2572.7  45646.9  87415.  177481.9 535734.8]
+[13:49:19]   prior sd [10.  15.   0.5 10.  15.   0.5]
+[13:49:19]   weakest directions of psi after eliminating everything (components in prior sd units):
+[13:49:19]     eigenvalue   1474.1: [-0.17  0.15  0.   -0.74  0.63 -0.03]
+[13:49:19]     eigenvalue   2572.7: [ 0.16 -0.08 -0.01  0.61  0.77  0.01]
+[13:49:19]     eigenvalue  45646.9: [-0.94 -0.28 -0.04  0.17  0.03  0.08]
+[13:49:31] step at lambda 1e-03: raw psi step [ 3.17 -2.16  0.19  6.01 -0.16  0.33] -> whole step shortened 3.3x
+[13:49:31]   raw depth step: max 30.4 m, 3829 vertices > 1 m, 238 > 10 m; after shortening 1622 clipped; raw xi step max 11.7, 7 clipped
+[13:50:03]   terms at the state: total -29100584.8 (value_and_grad: -29100584.8)
+[13:50:03]   exact vs predicted gain of the applied step and of its parts alone; then the exact gain by term
+[13:50:30]   d+xi+psi : actual   +213443.9  predicted   +142025.7  ratio  1.50
+[13:50:30]       prior_d -49, prior_xi +1461, prior_psi -0, first_return +102, ping A port +25650, shadow A port +29600, ping A stbd +45886, shadow A stbd +6433, ping B port +27483, shadow B port +48101, ping B stbd +24199, shadow B stbd +4580
+[13:50:56]   d        : actual    +25197.7  predicted    +18702.5  ratio  1.35
+[13:50:56]       prior_d -49, prior_xi +0, prior_psi +0, first_return +102, ping A port +4838, shadow A port +114, ping A stbd +7370, shadow A stbd -983, ping B port +6600, shadow B port +1722, ping B stbd +5569, shadow B stbd -84
+[13:51:23]   xi       : actual    +34784.5  predicted    +12445.3  ratio  2.79
+[13:51:23]       prior_d +0, prior_xi +1461, prior_psi +0, first_return +0, ping A port +8273, shadow A port -32, ping A stbd +24087, shadow A stbd -1899, ping B port +3471, shadow B port -436, ping B stbd +481, shadow B stbd -621
+[13:51:49]   psi      : actual   +116651.2  predicted    +48244.5  ratio  2.42
+[13:51:49]       prior_d +0, prior_xi +0, prior_psi -0, first_return +0, ping A port +10266, shadow A port +30114, ping A stbd -7982, shadow A stbd +8789, ping B port +17104, shadow B port +48948, ping B stbd +4069, shadow B stbd +5343
+[13:52:15]   d+xi     : actual    +69572.4  predicted    +50707.3  ratio  1.37
+[13:52:15]       prior_d -49, prior_xi +1461, prior_psi +0, first_return +102, ping A port +14704, shadow A port +279, ping A stbd +34685, shadow A stbd -2808, ping B port +11334, shadow B port +758, ping B stbd +9842, shadow B stbd -735
+[13:52:41]   xi+psi   : actual   +179118.6  predicted   +101840.4  ratio  1.76
+[13:52:41]       prior_d +0, prior_xi +1461, prior_psi -0, first_return +0, ping A port +18936, shadow A port +29678, ping A stbd +35327, shadow A stbd +7222, ping B port +20388, shadow B port +47803, ping B stbd +13532, shadow B stbd +4774
+[13:53:07]   applied step x 0.25: actual    +59252.8  predicted    +40184.4
+[13:53:33]   applied step x 0.5: actual   +114945.8  predicted    +77250.2
+[13:54:00]   applied step x 2.0: actual   +354029.1  predicted   +234152.5
+[13:54:01] saved

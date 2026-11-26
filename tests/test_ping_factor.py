@@ -174,3 +174,31 @@ def test_offset_equals_scaling_the_unit_intensity():
     v_scl, u_scl = F.laplace_ping_side(*args, jnp.asarray(S * math.exp(o)), use)
     assert float(v_off) == pytest.approx(float(v_scl), abs=1e-6)
     assert float(u_off) == pytest.approx(float(u_scl) + o, abs=1e-6)
+
+
+def test_mode_from_a_grid_does_not_depend_on_the_start():
+    """With many spikes F(u) has a shoulder beside its peak; the grid finds the peak from any start."""
+    th = Theta(noise=1e-7, L=13.0, eps=0.5, eta=1e-2, zeta=1e-3, ell=1.0, log_kappa_mean=0.0, log_kappa_std=1.5,
+               gain_db=np.zeros((2, 3)))
+    rng = np.random.default_rng(3)
+    S = fake_S(rng)
+    y = simulate(th, 0, S, 0.4, rng)
+    args = (th, 0, DR, jnp.asarray(y), jnp.asarray(S), jnp.ones(N_BINS, bool))
+    Fu = F._objective(*args)[0]
+    grid = [float(F.mode(*args, u0=jnp.asarray(u0), grid=49)[0]) for u0 in (-4.0, 0.0, 5.0)]
+    assert max(grid) - min(grid) < 1e-6
+    assert grid[0] == pytest.approx(0.4, abs=0.1)
+    for u0 in (-4.0, 0.0, 5.0):  # never worse than the mode found from that start alone
+        assert float(Fu(grid[0])) >= float(Fu(F.mode(*args, u0=jnp.asarray(u0))[0])) - 1e-6
+
+
+def test_temper_scales_the_bins_and_not_the_prior():
+    th = make_theta(std=0.8)
+    rng = np.random.default_rng(8)
+    S = fake_S(rng)
+    y = simulate(th, 0, S, 0.3, rng)
+    args = (th, 0, DR, jnp.asarray(y), jnp.asarray(S), jnp.ones(N_BINS, bool))
+    full, half = F._objective(*args)[0], F._objective(*args, temper=0.5)[0]
+    u, m = 0.3, th.at(0).log_kappa_mean
+    assert float(half(u) - half(m)) == pytest.approx(0.5 * float(full(u) - full(m)) - 0.25 * ((u - m) / 0.8) ** 2,
+                                                     rel=1e-9)

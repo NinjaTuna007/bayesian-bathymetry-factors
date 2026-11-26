@@ -1,0 +1,24 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[13:54:06] 124184 vertices, 49643 with any intensity information, 3529 in first-return rows; 1622 want > 1 m after the psi shortening (3829 before it)
+[13:54:06] by distance to the nearest track: vertices, share wanting > 1 m, median |step|, median information (intensity, first return, prior diagonal), median |gradient| (intensity, first return, prior)
+[13:54:06]     0-  1 m:   1678    2.4%    0.013 m   info  1.50e+03  1.45e+01  2.14e+00   grad  3.00e+01  3.17e+00  7.81e-02
+[13:54:06]     1-  2 m:   1770    2.4%    0.013 m   info  1.62e+03  4.45e+00  2.14e+00   grad  3.31e+01  1.13e+00  6.39e-02
+[13:54:06]     2-  4 m:   3671    0.7%    0.013 m   info  1.67e+03  2.46e+00  2.14e+00   grad  3.60e+01  5.60e-01  6.08e-02
+[13:54:06]     4-  8 m:   7340    0.1%    0.014 m   info  1.82e+03  3.23e-01  2.14e+00   grad  3.78e+01  8.75e-02  5.26e-02
+[13:54:06]     8- 15 m:  10989    0.2%    0.011 m   info  1.95e+03  1.67e-08  2.14e+00   grad  2.98e+01  4.03e-06  2.40e-02
+[13:54:06]    15- 25 m:  17206    3.5%    0.010 m   info  8.23e+02  0.00e+00  2.14e+00   grad  1.33e+01  1.09e-70  8.29e-03
+[13:54:06]    25- 40 m:  30668    2.9%    0.003 m   info  0.00e+00  0.00e+00  2.14e+00   grad  0.00e+00 8.09e-218  1.54e-05
+[13:54:06]    40- 60 m:  35897    0.0%    0.000 m   info  0.00e+00  0.00e+00  2.14e+00   grad  0.00e+00  0.00e+00  2.33e-06
+[13:54:07]    60-200 m:  14965    0.0%    0.000 m   info  0.00e+00  0.00e+00  2.14e+00   grad  0.00e+00  0.00e+00  2.33e-06
+[13:54:07] by the prior's share of the GGN diagonal: vertices, share of all that want > 1 m, median |step|
+[13:54:07]   prior share 0.000-0.010:  43903    0.0%    0.012 m
+[13:54:07]   prior share 0.010-0.100:   1831    0.1%    0.056 m
+[13:54:07]   prior share 0.100-0.500:    784    0.7%    0.142 m
+[13:54:07]   prior share 0.500-0.900:    568    4.3%    0.326 m
+[13:54:07]   prior share 0.900-0.999:   1589   37.8%    0.753 m
+[13:54:07]   prior share 0.999-1.010:  75509   57.1%    0.000 m
+[13:54:07] vertices wanting > 1 m: share of sum |gradient| by factor: intensity 83.0%, first return 1.1%, prior 15.9%; step agrees in sign with the total gradient on 64%
+[13:54:07]   of them: 34.3% have no intensity information; median distance to track 25.6 m; median intensity/prior diagonal 4.26e-04
+[13:54:07] sum of GGN diagonal over depths: intensity 2.317e+08, first return 4.365e+04, prior 2.644e+05; over the first-return vertices: intensity 1.893e+07, first return 4.365e+04
+[13:54:07]   first-return vertices: median intensity/first-return information 7620.6, median |gradient| intensity/first-return 66.6
+[13:54:17] wrote /home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/figs/optdiag/vertices_k9_k27.png

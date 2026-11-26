@@ -42,7 +42,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from bbf.inference.objective import Problem
-from bbf.ping.factor import DB_TO_LOG_I, bin_ranges, log_gamma, predicted
+from bbf.ping.factor import DB_TO_LOG_I, background, bin_ranges, log_gamma, predicted
 from bbf.ping.shadow import lit_probability
 from bbf.ping.theta import with_psi
 
@@ -60,22 +60,31 @@ def layout(problem: Problem) -> dict:
             "n_psi": n_psi, "size": nf + nb + n_u + n_psi}
 
 
+def _offset(problem: Problem, p: int) -> np.ndarray:
+    """Log transmit power (n,) of the pings of pass p; zeros without `Problem.kappa_offset`."""
+    if problem.kappa_offset is None:
+        return np.zeros(len(problem.poses[p]))
+    return np.asarray(problem.kappa_offset[p], dtype=float)
+
+
 def ping_weights(problem: Problem, S, u_hat, uses):
     r"""Per pass (n, 2, B): Fisher weight of each scored bin and the two derivatives of :math:`\log\bar I`."""
     th, dr = problem.theta, problem.dr
+    r = np.asarray(bin_ranges(problem.n_bins, dr))
     out = []
-    for y, Sp, up, use in zip(problem.y, S, u_hat, uses, strict=True):
+    for p, (y, Sp, up, use) in enumerate(zip(problem.y, S, u_hat, uses, strict=True)):
         W, a, c = np.zeros_like(Sp), np.zeros_like(Sp), np.zeros_like(Sp)
+        off = _offset(problem, p)[:, None]
         for side in (0, 1):
             st = th.at(side)
-            Ib, Isp = (np.asarray(x) for x in predicted(Sp[:, side], up[:, side, None], th, side, dr))
+            Ib, Isp = (np.asarray(x) for x in predicted(Sp[:, side], up[:, side, None], th, side, dr, off))
             ys = np.where(y[:, side] > 0, y[:, side], 1.0)
             lm = math.log1p(-st.eps) + np.asarray(log_gamma(ys, th.L, Ib))
             ls = math.log(st.eps) + np.asarray(log_gamma(ys, 1.0, Isp))
             resp = np.exp(lm - np.logaddexp(lm, ls))  # the main component's responsibility
-            W[:, side] = np.where(use[:, side] & (y[:, side] > 0), th.L * resp, 0.0)
+            W[:, side] = np.where(use[:, side] & (y[:, side] > 0), problem.temper * th.L * resp, 0.0)
             ek = np.exp(up[:, side])[:, None]
-            den = ek * Sp[:, side] + st.noise
+            den = ek * Sp[:, side] + np.asarray(background(th, side, r, off))
             a[:, side] = ek / den
             c[:, side] = ek * Sp[:, side] / den
         out.append((W, a, c))
@@ -95,11 +104,12 @@ def shadow_rows(problem: Problem, S, u_hat):
         coef = np.zeros_like(Sp)
         nb = Sp.shape[-1] // B
         for side in (0, 1):
-            def lit(s, u, side=side):
-                return jax.jvp(lambda ss: lit_probability(ss, u, th, side, problem.dr), (s,), (jnp.ones_like(s),))
-            p, dp = (np.asarray(x) for x in jax.vmap(lit)(jnp.asarray(Sp[:, side]), jnp.asarray(up[:, side])))
+            def lit(s, u, o, side=side):
+                return jax.jvp(lambda ss: lit_probability(ss, u, th, side, problem.dr, o), (s,), (jnp.ones_like(s),))
+            p, dp = (np.asarray(x) for x in jax.vmap(lit)(jnp.asarray(Sp[:, side]), jnp.asarray(up[:, side]),
+                                                          jnp.asarray(_offset(problem, p_i))))
             p = np.clip(p, 1e-12, 1 - 1e-12)  # as in `log_shadow_side`
-            g = dp / ((1 - p) * B)  # per block, per bin of the block
+            g = math.sqrt(problem.temper) * dp / ((1 - p) * B)  # per block, per bin of the block
             g = g * ~np.asarray(problem.labels[p_i][:, side, :nb], dtype=bool)  # dark blocks only
             if problem.valid is not None:
                 g = g * problem.valid[p_i][:, side, :nb]
@@ -109,8 +119,11 @@ def shadow_rows(problem: Problem, S, u_hat):
 
 
 def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None, S0=None,
-             fr=None, hz=None) -> sp.csc_matrix:
+             fr=None, hz=None, prior=None) -> sp.csc_matrix:
     r"""The augmented GGN matrix :math:`H` (size from `layout`), symmetric positive semidefinite plus priors.
+
+    prior: the depth prior whose precision goes in, default the problem's; e.g. the problem's with
+    its heavy-tailed slope factor reweighted at the current depths (`bbf.prior.Prior.at`).
 
     J[p][t][c]: the frozen Jacobian of pass p, ping t, side c, (B, n) or (B, 2n) with the field.
     S, u_hat: the data term's rendered intensities and :math:`\hat u` per pass (n, 2).
@@ -210,7 +223,7 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
         sd = np.asarray(problem.psi_prior[1], float).ravel()
         add(sp.coo_matrix((1.0 / sd**2, (np.arange(ip, ip + 6), np.arange(ip, ip + 6))), shape=(size, size)))
     # prior on (d, beta), with beta moved behind the field variables, and on xi
-    Pr = problem.prior.joint_precision().tocoo()
+    Pr = (problem.prior if prior is None else prior).joint_precision().tocoo()
     at = np.concatenate([np.arange(n), lay["beta"] + np.arange(lay["n_beta"])])
     add(sp.coo_matrix((Pr.data, (at[Pr.row], at[Pr.col])), shape=(size, size)))
     for rows in (fr, hz):

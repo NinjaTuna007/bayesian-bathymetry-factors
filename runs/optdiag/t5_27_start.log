@@ -1,0 +1,6 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[11:56:33] A port: u-hat is more than 0.05 from the maximum of F on 22.9% of ping-sides (F lower by 6951 nats in total, median 23.9); F'' > 0 at u-hat on 6.2%; more than one local maximum on 20.2%; scored bins per side median 89 (89 where off); |u-hat - prior mean| > 2 sd on 4.3%
+[11:56:35] A stbd: u-hat is more than 0.05 from the maximum of F on 15.8% of ping-sides (F lower by 72488 nats in total, median 352.6); F'' > 0 at u-hat on 2.8%; more than one local maximum on 43.4%; scored bins per side median 103 (104 where off); |u-hat - prior mean| > 2 sd on 1.1%
+[11:56:37] B port: u-hat is more than 0.05 from the maximum of F on 27.2% of ping-sides (F lower by 2319 nats in total, median 10.0); F'' > 0 at u-hat on 12.6%; more than one local maximum on 9.4%; scored bins per side median 73 (74 where off); |u-hat - prior mean| > 2 sd on 2.7%
+[11:56:38] B stbd: u-hat is more than 0.05 from the maximum of F on 10.0% of ping-sides (F lower by 4858 nats in total, median 49.4); F'' > 0 at u-hat on 0.9%; more than one local maximum on 60.0%; scored bins per side median 97 (97 where off); |u-hat - prior mean| > 2 sd on 19.0%
+[11:56:39] wrote /home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5/figs/optdiag/modes_k27_start.png

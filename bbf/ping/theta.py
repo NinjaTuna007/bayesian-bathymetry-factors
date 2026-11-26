@@ -19,6 +19,7 @@ import numpy.typing as npt
 
 PORT, STARBOARD = 0, 1
 BEAM_CENTRE, BEAM_WIDTH = math.radians(50.0), math.radians(60.0)  # PingDSP 3DSS defaults (rad)
+NOISE_REF = 20.0  # range :math:`r_N` (m) at which the background is `Theta.noise` (see `Theta.noise_slope`)
 
 
 class SideTheta(NamedTuple):
@@ -46,11 +47,11 @@ class Theta:
 
     Per-side fields take a scalar (same on both sides) or a pair; `at` reads one side.
 
-    Beam pattern of side :math:`c` :math:`B_c(\beta) = \exp(-4 \ln 2\, (\beta - \beta_{0,c})^2 / \omega_c^2)`, absorption
+    Beam pattern of side :math:`c` :math:`B_c(\beta) = \exp(-4 \ln 2\, (\beta - \beta_{0,c})^2 / \omega_c^2 + \Delta_c(\beta))`, absorption
     :math:`\alpha` (amplitude, Np/m, so the two-way intensity loss is :math:`e^{-4 \alpha r}`),
     receiver gain in dB of amplitude
     :math:`10 \log_{10} g_c(r) = g_{c,0} + g_{c,1} r + g_{c,2} \log_{10} r` (`gain_db`, rows
-    port and starboard), background noise :math:`N_c` (intensity before gain), gamma shape
+    port and starboard), background :math:`N_c` (intensity before gain), gamma shape
     :math:`L`, spike probability :math:`\epsilon_c`, spike level :math:`\eta_c`, ringing
     level :math:`\zeta_c` and decay length :math:`\ell_c`, and the Gaussian prior on
     :math:`\log \kappa_{t,c}` (mean `log_kappa_mean`, standard deviation `log_kappa_std`).
@@ -71,6 +72,18 @@ class Theta:
     :math:`g_c(r) N_c`, so they do not move with the gain.
 
     `z_water` is the world height of the water surface: seabed above it returns no echo.
+
+    :math:`\Delta_c` is zero by default. With `beam_knots` (K,), beam angles in radians in increasing
+    order, and `beam_log` (2, K), it is piecewise linear through those values per side and constant
+    beyond the end knots: a free response across the swath on top of the Gaussian, e.g. measured
+    on level ground, which the Gaussian's two parameters cannot bend to.
+
+    Background law (`bbf.ping.factor.background`), off by default: the background of a bin at
+    range :math:`r` of a ping with log transmit power :math:`o` is
+    :math:`N_c (r / r_N)^{\nu} e^{\gamma o}` with :math:`\nu` = `noise_slope`, :math:`\gamma` =
+    `noise_power` and :math:`r_N` = `NOISE_REF`. Receiver noise has :math:`\nu = \gamma = 0`;
+    volume reverberation follows the transmit power (:math:`\gamma = 1`) and, before a gain
+    that cancels the seabed's :math:`r^{-3}`, falls about as :math:`r^{-2}`.
     """
     noise: npt.ArrayLike
     L: float
@@ -91,6 +104,10 @@ class Theta:
     wc_lit: npt.ArrayLike | None = None
     floor: npt.ArrayLike | None = None
     z_water: float = math.inf
+    noise_slope: float = 0.0
+    noise_power: float = 0.0
+    beam_knots: npt.ArrayLike | None = None
+    beam_log: npt.ArrayLike | None = None
 
     def __post_init__(self):
         for name in ("noise", "eps", "eta", "zeta", "ell", "log_kappa_mean", "log_kappa_std", "beta0", "omega"):
@@ -101,6 +118,14 @@ class Theta:
             object.__setattr__(self, "wc_lit", np.array(self.wc_lit, dtype=float).reshape(2, -1))
         if self.floor is not None:
             object.__setattr__(self, "floor", np.array(self.floor, dtype=float).reshape(2, -1))
+        if (self.beam_knots is None) != (self.beam_log is None):
+            raise ValueError("beam_knots and beam_log go together")
+        if self.beam_knots is not None:
+            knots = np.array(self.beam_knots, dtype=float).ravel()
+            if np.any(np.diff(knots) <= 0):
+                raise ValueError("beam_knots must increase")
+            object.__setattr__(self, "beam_knots", knots)
+            object.__setattr__(self, "beam_log", np.array(self.beam_log, dtype=float).reshape(2, len(knots)))
 
     def at(self, side: int) -> SideTheta:
         """Per-side parameters of `side` (0 port, 1 starboard)."""
@@ -128,8 +153,11 @@ def with_psi(theta: Theta, psi) -> Theta:
 
 
 def render_key(theta: Theta) -> tuple:
-    r"""The fields of theta the rendering of :math:`S` depends on besides :math:`\psi`, as a hashable key."""
-    return (float(theta.alpha), float(theta.wavelength), float(theta.shadow_margin), float(theta.z_water))
+    r"""The fields of theta the rendering of :math:`S` depends on besides :math:`\psi`, as a hashable key (the last entry is the beam's :math:`\Delta_c`, or None)."""
+    beam = None
+    if theta.beam_knots is not None:
+        beam = (tuple(np.asarray(theta.beam_knots).tolist()), tuple(map(tuple, np.asarray(theta.beam_log).tolist())))
+    return (float(theta.alpha), float(theta.wavelength), float(theta.shadow_margin), float(theta.z_water), beam)
 
 
 def render_theta(key: tuple, psi) -> Theta:
@@ -137,7 +165,9 @@ def render_theta(key: tuple, psi) -> Theta:
 
     Its noise-model fields are placeholders: only :math:`S` may be computed from it.
     """
-    alpha, wavelength, margin, z_water = key
+    alpha, wavelength, margin, z_water, beam = key
+    knots, values = (None, None) if beam is None else beam
     th = Theta(noise=1.0, L=1.0, eps=0.5, eta=1.0, zeta=1.0, ell=1.0, log_kappa_mean=0.0, log_kappa_std=1.0,
-               alpha=alpha, wavelength=wavelength, shadow_margin=margin, z_water=z_water)
+               alpha=alpha, wavelength=wavelength, shadow_margin=margin, z_water=z_water, beam_knots=knots,
+               beam_log=values)
     return with_psi(th, psi)

@@ -45,7 +45,7 @@ from scipy.stats import gamma as gamma_dist
 
 from bbf import mesh as M
 from bbf.ping import render as Rn
-from bbf.ping.factor import bin_ranges, log_gain
+from bbf.ping.factor import background, bin_ranges, log_gain
 from bbf.ping.theta import Theta
 
 
@@ -61,18 +61,22 @@ def _blocks(x, block: int):
     return x[..., : n * block].reshape(*x.shape[:-1], n, block).mean(axis=-1)
 
 
-def block_labels(y, theta: Theta, side: int, dr: float) -> np.ndarray:
+def block_labels(y, theta: Theta, side: int, dr: float, offset=None) -> np.ndarray:
     r"""Lit (True) / shadow (False) label of each block (..., n_blocks) from measured intensities y (..., n_bins).
 
-    Against the measured floor `Theta.floor` when set, else against :math:`g_c(r) N_c`.
+    Against the measured floor `Theta.floor` when set, else against the gain times the background.
+    offset: the log transmit power of each ping (...), for a background that follows it
+    (`bbf.ping.factor.background`); default zero.
     """
     st = theta.at(side)
     y = np.asarray(y, dtype=float)
     if theta.floor is not None:
         m = np.asarray(_blocks(y, theta.block))
         return m / _floor_side(theta, side, m.shape[-1]) > threshold(theta)
-    g = np.exp(np.asarray(log_gain(bin_ranges(y.shape[-1], dr), st.gain_db)))
-    return np.asarray(_blocks(y / (g * st.noise), theta.block)) > threshold(theta)
+    r = bin_ranges(y.shape[-1], dr)
+    g = np.exp(np.asarray(log_gain(r, st.gain_db)))
+    off = 0.0 if offset is None else np.asarray(offset, dtype=float)[..., None]
+    return np.asarray(_blocks(y / (g * np.asarray(background(theta, side, r, off))), theta.block)) > threshold(theta)
 
 
 def _floor_side(theta: Theta, side: int, n_blocks: int) -> np.ndarray:
@@ -148,8 +152,12 @@ def noise_lit_rate(theta: Theta, side: int, n_blocks: int) -> np.ndarray:
     return rate[:n_blocks]
 
 
-def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = None):
+def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = None, offset=0.0,
+                    gain_ratio: jax.Array | float = 1.0):
     r"""Predicted :math:`p(\ell_j = \text{lit} \mid d)` (n_blocks,) from the unit intensity S (n_bins,).
+
+    dr, offset: the bin spacing and the ping's log transmit power, needed only when the background
+    follows the range or the power (`bbf.ping.factor.background`); :math:`N_c` is then its block mean.
 
     With :math:`D(m) = 1 - P(BL, BL\,T/m)` the chance that a block of mean ratio :math:`m` passes the
     threshold (:math:`D(1) = p_\mathrm{fa}`) and :math:`p_0` the lit rate without a seabed echo,
@@ -159,29 +167,46 @@ def lit_probability(S, log_kappa, theta: Theta, side: int, dr: float | None = No
         p = p_0 + (1 - p_0) \frac{D(m) - p_\mathrm{fa}}{1 - p_\mathrm{fa}},
 
     which is :math:`p_0` where the seabed predicts nothing and tends to 1 for a strong echo.
-    With the measured floor (`Theta.floor`), :math:`m` is taken against it and needs the bin spacing dr.
+
+    gain_ratio (n_blocks,): the gain now over the gain the labels were thresholded with,
+    :math:`g(r_j) / g_\mathrm{label}(r_j)`. The statistic is :math:`y / (g_\mathrm{label} N)`, whose
+    predicted mean is that ratio times :math:`m`; without it a gain that grows after the labels were
+    taken makes dark blocks likelier (through a smaller :math:`\hat\kappa`) at no cost.
+
+    With the measured floor (`Theta.floor`), :math:`m` is taken against it and needs the bin spacing dr;
+    the labels then do not move with the gain, and gain_ratio is not used.
     """
     k = theta.block * theta.L
-    if theta.floor is None:
-        m = 1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / theta.at(side).noise
-    else:
+    if theta.floor is not None:
         if dr is None:
             raise ValueError("lit_probability with a measured floor needs the bin spacing dr")
         g = jnp.exp(log_gain(bin_ranges(S.shape[-1], dr), jnp.asarray(theta.gain_db)[side]))
         nb = S.shape[-1] // theta.block
         m = 1.0 + jnp.exp(log_kappa) * _blocks(g * S, theta.block) / jnp.asarray(_floor_side(theta, side, nb))
+    else:
+        if theta.noise_slope == 0.0 and theta.noise_power == 0.0:
+            noise = theta.at(side).noise
+        elif dr is None:
+            raise ValueError("the background follows the range or the power: pass dr")
+        else:
+            noise = _blocks(background(theta, side, bin_ranges(S.shape[-1], dr), offset), theta.block)
+        m = gain_ratio * (1.0 + jnp.exp(log_kappa) * _blocks(S, theta.block) / noise)
     D = 1.0 - gammainc(k, k * threshold(theta) / m)
     p0 = jnp.asarray(noise_lit_rate(theta, side, m.shape[-1]))
     fa = theta.label_fa
     return p0 + (1.0 - p0) * (D - fa) / (1.0 - fa)
 
 
-def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None, dr: float | None = None):
+def log_shadow_side(theta: Theta, side: int, labels, S, log_kappa, valid=None, dr: float | None = None, offset=0.0,
+                    stop: bool = True, gain_ratio: jax.Array | float = 1.0):
     r""":math:`\sum_j \log(1 - p_j)` over the valid dark blocks of one side; `log_kappa` is held fixed.
 
-    Lit blocks are left to the ping factor, which scores their intensities.
+    Lit blocks are left to the ping factor, which scores their intensities. dr, offset: as in
+    `lit_probability`. stop: hold `log_kappa` fixed in the derivative only (the value still moves
+    with it); False differentiates through it, so the gradient is that of the value. gain_ratio:
+    as in `lit_probability`.
     """
-    p = lit_probability(S, jax.lax.stop_gradient(log_kappa), theta, side, dr)
+    p = lit_probability(S, jax.lax.stop_gradient(log_kappa) if stop else log_kappa, theta, side, dr, offset, gain_ratio)
     p = jnp.clip(p, 1e-12, 1.0 - 1e-12)
     dark = ~jnp.asarray(labels, dtype=bool)
     if valid is not None:

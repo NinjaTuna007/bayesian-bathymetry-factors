@@ -71,3 +71,21 @@ def test_field_jacobian_matches_jvp(scene, side):
     _, jvp = jax.jvp(lambda xx: P.unit_intensity(m, d, tilted, side, th, u, N_BINS, DR, xx), (xi,), (jnp.asarray(dx),))
     jvp = np.asarray(jvp)
     np.testing.assert_allclose(Jt[:, n:] @ dx, jvp, rtol=1e-6, atol=1e-8 * np.abs(jvp).max())
+
+
+def test_jacobian_carries_the_beam_response(scene):
+    """With a free beam response in theta, J still equals the jvp of the render, and both differ from the Gaussian's."""
+    import dataclasses
+    m, d, th, u = scene
+    sp = dataclasses.replace(th, beam_knots=np.radians([15.0, 35.0, 55.0, 75.0]),
+                             beam_log=[[0.4, 0.0, -0.8, -2.0], [-1.0, 0.0, 0.3, 0.1]])
+    pose = jnp.array([0.0, 0.3, SONAR_Z, 0.0, 0.0, 0.0])
+    v = m.vertices
+    dv = np.sin(v[:, 0] / 4.0) * np.cos(v[:, 1] / 3.0)
+    for side in (0, 1):
+        J = ping_side_jacobian(m, d, pose, side, sp, u, N_BINS, DR)
+        _, jvp = jax.jvp(lambda dd, side=side: P.unit_intensity(m, dd, pose, side, sp, u, N_BINS, DR), (d,), (jnp.asarray(dv),))
+        jvp = np.asarray(jvp)
+        np.testing.assert_allclose(J @ dv, jvp, rtol=1e-6, atol=1e-8 * np.abs(jvp).max())
+        J0 = ping_side_jacobian(m, d, pose, side, th, u, N_BINS, DR)
+        assert not np.allclose(J @ dv, J0 @ dv, rtol=1e-3, atol=1e-8 * np.abs(jvp).max())

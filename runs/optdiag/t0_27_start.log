@@ -1,0 +1,11 @@
+warning: Git tree '/home/ola/rss27_sss_bathymetry/src/.claude/worktrees/agent-a5e67f5bc378481e5' is dirty
+[11:33:15] theta fit: eta [1.16251237e+07 5.26933762e+12], zeta [4.46133202e+11 1.94369404e+08], ell [20.          1.81306256], log kappa [36.17651117 38.58536926] ± [1.64178053 1.57456963]
+[11:33:57]   GN start: ell = -11366713.4
+[11:34:35]   GN 0: ell = -11144708.5 (+222004.9), max |dd| = 0.000 m, lambda = 3.3e-04, xi sd 0.80, 38s
+[11:34:54]   GN 1: ell = -11031936.6 (+112771.9), max |dd| = 0.000 m, lambda = 1.1e-04, xi sd 0.97, 19s
+[11:35:14]   GN 2: ell = -10985851.0 (+46085.6), max |dd| = 0.000 m, lambda = 3.7e-05, xi sd 1.14, 19s
+[11:35:33]   GN 3: ell = -10983418.0 (+2433.0), max |dd| = 0.000 m, lambda = 1.2e-05, xi sd 1.21, 19s
+[11:35:51]   GN 4: ell = -10973766.5 (+9651.5), max |dd| = 0.000 m, lambda = 4.1e-06, xi sd 1.34, 19s
+[11:36:48]   GN 5: ell = -10944908.9 (+28857.6), max |dd| = 0.000 m, lambda = 1.4e-02, xi sd 1.36, 56s
+[11:37:10] k=27 start: ell -11000828.1 data -10972339.5 fr -7458.1 xi sd 1.36 (23s)
+[11:37:23] jacobians 13s

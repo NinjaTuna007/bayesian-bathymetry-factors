@@ -2,6 +2,7 @@ from .calibrate import calibrate
 from .gauss_newton import gauss_newton
 from .ggn import assemble, layout
 from .init import (
+    bank_points,
     depths_from_points,
     first_echo,
     first_echo_points,
@@ -21,6 +22,7 @@ from .search import search_trend
 __all__ = [
     "Problem",
     "assemble",
+    "bank_points",
     "calibrate",
     "coarsen_pass",
     "coarsen_theta",
