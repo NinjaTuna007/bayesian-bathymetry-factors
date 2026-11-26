@@ -113,6 +113,92 @@ def first_echo(ps: Pass, theta: Theta, min_range: float = 3.0, run: int = 5, jum
     return out
 
 
+def far_edge(ps: Pass, theta: Theta, r0: np.ndarray, drop: float = 3.0, recover: float = 1.0,
+             near: tuple[float, float] = (2.0, 8.0), smooth: float = 2.0, min_tail: float = 5.0) -> np.ndarray:
+    r"""Slant range (n, 2) beyond which each ping-side sees no more seabed; NaN where it sees seabed to the end.
+
+    With :math:`e_b = \log y_b - \log g_c(r_b) - o_t - \log S^\flat_b` the log intensity corrected for
+    the gain, the transmit power and the unit intensity of a level seabed at the depth :math:`D_t` below
+    the sonar (the later first echo),
+
+    .. math::
+
+        S^\flat(r) = B_c(\beta)\,\frac{\sin^2\beta}{\cos\beta}\,\frac{e^{-4\alpha r}}{r^3}, \qquad \sin\beta = D_t / r
+
+    (`bbf.ping.geometry.echo` on a level seabed, :math:`\cos\beta` from the footprint per range),
+    median-filtered over `smooth` m, so that the fading with grazing angle is not taken for an edge, and :math:`\bar e` its median over the `near` window past the
+    first echo :math:`r_0` (the seabed just beyond the onset), the edge is the first bin past that
+    window where :math:`e_b < \bar e - \text{drop}` and the intensity never comes back within
+    `recover` of that level for the rest of the ping (at least `min_tail` m of it):
+
+    .. math::
+
+        r_e = \min\Bigl\{ r_b : \max_{b' \ge b} e_{b'} < \bar e - \text{drop} + \text{recover} \Bigr\}.
+
+    A shadow behind a crest ends where the seabed comes back; the far edge does not. On the
+    2026-07-07 Örebro passes starboard's edge is the shore: edges of different passes fall on
+    one contour of the ground. Beyond it the intensity is still some 200 times the water
+    column's (reverberation), so labels against the measured floor call it lit seabed.
+    """
+    from scipy.ndimage import median_filter
+
+    r = np.asarray(bin_ranges(ps.n_bins, ps.dr))
+    w = max(round(smooth / ps.dr), 1)
+    out = np.full((ps.n_pings, 2), np.nan)
+    D = np.max(np.where(np.isfinite(r0), r0, -np.inf), axis=1)
+    sin_b = np.clip(D[:, None] / np.maximum(r[None], 1e-9), 1e-3, 1.0 - 1e-9)
+    beta = np.arcsin(sin_b)
+    for c in (0, 1):
+        log_B = -4 * np.log(2) * (beta - np.asarray(theta.beta0)[c]) ** 2 / np.asarray(theta.omega)[c] ** 2
+        if theta.beam_knots is not None:
+            log_B = log_B + np.interp(beta, np.asarray(theta.beam_knots), np.asarray(theta.beam_log)[c])
+        log_flat = log_B + 2 * np.log(sin_b) - 0.5 * np.log1p(-sin_b**2) - 4 * theta.alpha * r[None] - 3 * np.log(r[None])
+        with np.errstate(divide="ignore"):
+            e = (np.log(np.maximum(ps.y[:, c], 1e-300)) - np.asarray(log_gain(r, np.asarray(theta.gain_db)[c]))[None]
+                 - ps.log_power()[:, None] - log_flat)
+        e = median_filter(e, size=(1, w), mode="nearest")
+        tail = np.maximum.accumulate(e[:, ::-1], axis=1)[:, ::-1]  # the most the intensity comes back beyond each bin
+        for t in range(ps.n_pings):
+            if not np.isfinite(r0[t, c]):
+                continue
+            j0, j1 = np.searchsorted(r, r0[t, c] + near[0]), np.searchsorted(r, r0[t, c] + near[1])
+            if j1 >= ps.n_bins:
+                continue
+            ref = np.median(e[t, j0:j1])
+            ok = (tail[t, j1:] < ref - drop + recover) & (e[t, j1:] < ref - drop) & (r[j1:] <= r[-1] - min_tail)
+            if ok.any():
+                out[t, c] = r[j1 + int(np.argmax(ok))]
+    return out
+
+
+def far_edge_points(ps: Pass, edge: np.ndarray, rise: float = 0.0, window: int = 9) -> np.ndarray:
+    r"""World points (m, 3) where the seabed leaves the water, from the far edges (n, 2) of `far_edge`.
+
+    Beyond its far edge a ping-side sees no seabed again, as where a bank reaches the water
+    surface. With the surface `rise` m above the sonar (a hull-mounted sonar: about its draft),
+    the seabed at slant range :math:`r_e` on that side is at the surface, a horizontal distance
+    :math:`\sqrt{r_e^2 - \text{rise}^2}` from the sonar across the track. Edges are first
+    median-filtered over `window` pings of the side, which drops single-ping detections.
+    """
+    from scipy.ndimage import median_filter
+
+    yaw = ps.poses[:, 5]
+    stb = np.column_stack([np.cos(yaw), -np.sin(yaw)])
+    out = []
+    for c, sgn in ((0, -1.0), (1, 1.0)):
+        e = np.asarray(edge[:, c], dtype=float)
+        ok = np.isfinite(e)
+        if not ok.any():
+            continue
+        filled = np.where(ok, e, np.inf)
+        sm = median_filter(filled, size=window, mode="nearest")  # inf where most of the window has no edge
+        keep = ok & np.isfinite(sm) & (np.abs(e - sm) < 3.0)
+        x = np.sqrt(np.maximum(sm[keep] ** 2 - rise**2, 0.0))
+        xy = ps.poses[keep, :2] + sgn * x[:, None] * stb[keep]
+        out.append(np.column_stack([xy, ps.poses[keep, 2] + rise]))
+    return np.concatenate(out) if out else np.zeros((0, 3))
+
+
 def first_echo_points(ps: Pass, r0: np.ndarray) -> np.ndarray:
     r"""World seabed points (m, 3) below the sonar from the later first echo of each ping.
 

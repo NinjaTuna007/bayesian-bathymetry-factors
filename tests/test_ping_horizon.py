@@ -47,6 +47,17 @@ def test_scored_blocks_keeps_closed_dark_runs_past_the_first_echo():
     assert not Hz.scored_blocks([lab], [valid], [r0], 1.0, max_gap=3.0)[0][0, 0, 7]
 
 
+def test_scored_blocks_scores_dark_blocks_past_a_far_edge():
+    lab = np.zeros((1, 2, 12), bool)
+    lab[0, 0, 2:6] = True  # lit 2..5, then dark to the end: no lit seabed closes the run
+    r0 = np.array([[1.6, np.nan]])
+    assert not Hz.scored_blocks([lab], None, [r0], 1.0, max_gap=3.0)[0][0, 0, 6:].any()
+    far = np.array([[6.0, np.nan]])
+    use = Hz.scored_blocks([lab], None, [r0], 1.0, max_gap=3.0, far=[far], far_extent=4.0)[0]
+    np.testing.assert_array_equal(np.flatnonzero(use[0, 0]), np.arange(2, 10))  # 6.5..9.5 are within 4 m
+    assert not use[0, 1].any()
+
+
 def test_margin_agrees_with_the_rendered_shadow(scene):
     """Blocks with a clearly positive margin are the dark ones of the render, negative ones lit; flat ground is all open."""
     m, ridge = scene

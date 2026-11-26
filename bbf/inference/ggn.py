@@ -119,8 +119,11 @@ def shadow_rows(problem: Problem, S, u_hat):
 
 
 def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=None, psi=None, S0=None,
-             fr=None, hz=None) -> sp.csc_matrix:
+             fr=None, hz=None, prior=None) -> sp.csc_matrix:
     r"""The augmented GGN matrix :math:`H` (size from `layout`), symmetric positive semidefinite plus priors.
+
+    prior: the depth prior whose precision goes in, default the problem's; e.g. the problem's with
+    its heavy-tailed slope factor reweighted at the current depths (`bbf.prior.Prior.at`).
 
     J[p][t][c]: the frozen Jacobian of pass p, ping t, side c, (B, n) or (B, 2n) with the field.
     S, u_hat: the data term's rendered intensities and :math:`\hat u` per pass (n, 2).
@@ -220,7 +223,7 @@ def assemble(problem: Problem, J: list[list[list[sp.csr_matrix]]], S, u_hat, Jb=
         sd = np.asarray(problem.psi_prior[1], float).ravel()
         add(sp.coo_matrix((1.0 / sd**2, (np.arange(ip, ip + 6), np.arange(ip, ip + 6))), shape=(size, size)))
     # prior on (d, beta), with beta moved behind the field variables, and on xi
-    Pr = problem.prior.joint_precision().tocoo()
+    Pr = (problem.prior if prior is None else prior).joint_precision().tocoo()
     at = np.concatenate([np.arange(n), lay["beta"] + np.arange(lay["n_beta"])])
     add(sp.coo_matrix((Pr.data, (at[Pr.row], at[Pr.col])), shape=(size, size)))
     for rows in (fr, hz):

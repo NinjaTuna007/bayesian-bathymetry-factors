@@ -101,8 +101,9 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     log(f"  GN start: ell = {ell:.1f}")
     for it in range(max_iter):
         t0 = time.time()
+        # the prior's curvature where the depths are: its heavy-tailed slope factor, if any, is reweighted
         H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, S0=S0, fr=det["first_return"],
-                         hz=det["horizon"])
+                         hz=det["horizon"], prior=problem.prior.at(d, beta))
         g = np.zeros(lay["size"])
         g[:n], g[ib:ib + nb] = gd, gb
         if field:

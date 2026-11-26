@@ -49,7 +49,8 @@ def laplace(problem: Problem, d, beta, J, n_samples: int = 200, rng=None, Jb=Non
     precision H it came from (undamped).
     """
     _, _, det = value_and_grad(problem, d, beta, psi=psi, xi=xi)
-    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, fr=det["first_return"], hz=det["horizon"])
+    H = ggn.assemble(problem, J, det["S"], det["u"], Jb=Jb, psi=psi, fr=det["first_return"], hz=det["horizon"],
+                     prior=problem.prior.at(d, beta))
     lay = ggn.layout(problem)
     free = np.ones(lay["size"], bool)
     if problem.free_psi and problem.psi_held is not None:
