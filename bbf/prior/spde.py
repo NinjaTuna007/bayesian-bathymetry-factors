@@ -100,11 +100,28 @@ def trend_design(mesh: Mesh, p: int = 3) -> np.ndarray:
     raise ValueError("the trend has 1 (constant) or 3 (planar) coefficients")
 
 
+def bowl_design(mesh: Mesh, tracks: np.ndarray, scale: float = 30.0) -> np.ndarray:
+    r"""Trend design (n, 2) of a channel: rows :math:`(1, -\min(s, s_0)^2 / s_0^2)`, :math:`s` the distance to the nearest track point.
+
+    tracks: (m, 2) sonar positions in mesh-local coordinates; scale: :math:`s_0` (m). With
+    :math:`\beta = (\beta_0, \beta_1)` the mean depth is :math:`\beta_0` under the tracks and rises by
+    :math:`\beta_1` metres to a rim at :math:`s_0` and beyond: a bowl across the track for
+    :math:`\beta_1 > 0`, the constant mean for :math:`\beta_1 = 0`. A boat keeps to the deep water, so
+    where the seabed shoals to a shore it does so away from the tracks; with the constant mean the
+    field relaxes to the depth under the tracks within its range, a flat floor where the banks are.
+    """
+    from scipy.spatial import cKDTree
+
+    s = cKDTree(np.asarray(tracks, dtype=float)).query(mesh.vertices)[0]
+    return np.column_stack([np.ones(mesh.n_vertices), -np.minimum(s, scale) ** 2 / scale**2])
+
+
 @dataclass(frozen=True)
 class Prior:
     r"""The two prior factors :math:`p(\beta)` and :math:`p(d \mid \beta)`; mesh, :math:`\rho`, :math:`\sigma`, :math:`\mu_\beta`, :math:`\Sigma_\beta` are fixed.
 
-    The trend is planar when :math:`\mu_\beta` has 3 entries and constant when it has 1;
+    The trend is planar when :math:`\mu_\beta` has 3 entries and constant when it has 1, or has
+    the columns of `design` (n, p) when that is given (e.g. `bowl_design`);
     alpha is the SPDE order (2 or 3).
 
     slope, if given, adds a factor on the facet directions: each face's gradient :math:`\nabla u_f` of
@@ -147,6 +164,7 @@ class Prior:
     slope: float | None = None
     slope_nu: float | None = None
     slope_at: np.ndarray | None = field(default=None, compare=False, repr=False)
+    design: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     @property
     def n_beta(self) -> int:
@@ -198,6 +216,10 @@ class Prior:
 
     @cached_property
     def X(self) -> np.ndarray:
+        if self.design is not None:
+            if self.design.shape != (self.mesh.n_vertices, self.n_beta):
+                raise ValueError(f"design is {self.design.shape}, expected {(self.mesh.n_vertices, self.n_beta)}")
+            return np.asarray(self.design, dtype=float)
         return trend_design(self.mesh, self.n_beta)
 
     @cached_property

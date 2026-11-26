@@ -36,6 +36,7 @@ import numpy as np
 from bbf import mesh as M
 from bbf.inference.calibrate import calibrate
 from bbf.inference.gauss_newton import gauss_newton
+from bbf.inference.init import far_edge as find_far_edge
 from bbf.inference.init import first_echo
 from bbf.inference.jacobian import ping_side_jacobians
 from bbf.inference.laplace import laplace
@@ -140,7 +141,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           horizon: Horizon | None = None, label_floor: bool = True, callback=None,
           min_range: float = 0.0, fit_shape: bool = False, psi_held=None, mode_grid: int = 0,
           shadow_stop: bool = True, temper: float = 1.0, field_steps: int | None = None,
-          kappa_std: float | None = None, ratio: RatioMatch | None = None, log=print) -> dict:
+          kappa_std: float | None = None, far_edge: bool = False, far_extent: float = 10.0,
+          ratio: RatioMatch | None = None, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -186,6 +188,13 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     against 3 to 5 afterwards). The labels' threshold depends on :math:`L`, so the labels and the
     spike parameters are then taken again, and stay for the later rounds.
 
+    far_edge: find each ping-side's far edge (`bbf.inference.init.far_edge`), where the seabed ends
+    for good (on the Örebro passes the shore), label every block beyond it dark, so the ping factor
+    leaves it out, and with the horizon factor score the dark blocks up to `far_extent` m beyond it
+    (`scored_blocks`). Beyond the edge the intensity is reverberation, still far above the water
+    column's floor: against that floor it was labelled lit seabed, which only a dark reflectivity
+    or a loose likelihood could explain.
+
     kappa_std: ties the per-ping gains of a side: the standard deviation of every :math:`\log\kappa_{t,c}`
     about its side's mean (refitted each round, shifted by the known transmit power) is held at this
     value instead of the spread of the fitted modes. The transmit power is known, so what is left to
@@ -229,6 +238,15 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         if label_floor:
             theta = dataclasses.replace(theta, floor=measured_floor(ys, r0, theta, dr, onset))
         labels = [labels_of(p, theta) for p in passes]
+        far = None
+        if far_edge:
+            far = [find_far_edge(p, theta, r) for p, r in zip(passes, r0)]
+            rb_e = (np.arange(labels[0].shape[-1]) + 0.5) * block_dr
+            n_was = sum(int(lab.sum()) for lab in labels)
+            labels = [lab & ~(rb_e >= np.nan_to_num(f, nan=np.inf)[..., None]) for lab, f in zip(labels, far)]
+            fr_side = [np.mean(np.concatenate([np.isfinite(f[:, c]) for f in far])) for c in (0, 1)]
+            log(f"far edge on port {fr_side[0]:.0%}, starboard {fr_side[1]:.0%} of pings; "
+                f"{n_was - sum(int(lab.sum()) for lab in labels)} lit blocks beyond it labelled dark")
         valid = [onset_valid(r, lab.shape[-1], block_dr, onset) & beyond(lab.shape[-1], block_dr, min_range)
                  for r, lab in zip(r0, labels)]
         rb = (np.arange(labels[0].shape[-1]) + 0.5) * block_dr
@@ -239,7 +257,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         theta = dataclasses.replace(theta, wc_lit=water_column_lit_rate(labels, r0, block_dr, onset))
         hz = None
         if horizon is not None:
-            hz = dataclasses.replace(horizon, use=scored_blocks(labels, valid, r0, block_dr, horizon.max_gap))
+            hz = dataclasses.replace(horizon, use=scored_blocks(labels, valid, r0, block_dr, horizon.max_gap,
+                                                                far=far, far_extent=far_extent))
             log(f"horizon factor scores {sum(int(h.sum()) for h in hz.use)} blocks, "
                 f"{sum(int((h & ~lab).sum()) for h, lab in zip(hz.use, labels))} of them dark")
         return theta, Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr,

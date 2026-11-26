@@ -229,3 +229,26 @@ def test_student_slope_makes_a_bank_cheaper():
         pr = P.Prior(m, 5.0, 8.0, mu_beta=np.array([0.0]), Sigma_beta=np.array([[4.0]]), slope=0.2, slope_nu=nu)
         cost[nu] = pr.log_density(np.zeros(m.n_vertices), np.zeros(1)) - pr.log_density(bank, np.zeros(1))
     assert cost[1.0] < 0.5 * cost[None]
+
+
+def test_bowl_design_rises_to_a_rim_and_enters_the_prior():
+    from bbf import mesh as M
+    from bbf.prior import Prior, bowl_design
+
+    m = M.build(0.0, 40.0, 0.0, 10.0, h=1.0)
+    x0 = float(np.median(m.vertices[:, 0])) - 15.0
+    tracks = np.column_stack([np.full(401, x0), np.linspace(m.vertices[:, 1].min() - 5, m.vertices[:, 1].max() + 5, 401)])  # along x = x0
+    X = bowl_design(m, tracks, scale=20.0)
+    assert X.shape == (m.n_vertices, 2)
+    s_true = np.abs(m.vertices[:, 0] - x0)
+    np.testing.assert_allclose(X[:, 0], 1.0)
+    np.testing.assert_allclose(X[:, 1], -np.minimum(s_true, 20.0) ** 2 / 400.0, atol=1e-3)
+    on, far = s_true < 0.3, s_true > 20.0
+    assert on.any() and far.any()
+    pr = Prior(m, 5.0, 2.0, mu_beta=np.array([16.0, 0.0]), Sigma_beta=np.diag([100.0, 100.0]), design=X)
+    beta = np.array([16.0, 8.0])
+    d = X @ beta
+    assert d[on].mean() > 15.9 and abs(d[far].mean() - 8.0) < 1e-9
+    # the bowl itself is the trend: it costs only the coefficient's prior
+    np.testing.assert_allclose(pr.log_density(d, beta), pr.log_density(X @ pr.mu_beta, pr.mu_beta) - 0.5 * 8.0**2 / 100.0)
+    assert pr.joint_precision().shape == (m.n_vertices + 2, m.n_vertices + 2)
