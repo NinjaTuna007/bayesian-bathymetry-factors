@@ -322,3 +322,105 @@ def test_infer_with_the_ratio_match_ascends_as_predicted():
     rho = np.array([h["rho"] for h in steps])
     assert np.all((rho > 0.02) & (rho < 3.0)), rho
     assert 0.5 < np.median(rho) < 2.0, rho
+
+
+def _brute_assign(fp, times, ys, uses, key_of, gap, min_visits):
+    """Reference: the visits (sets of (pass, flat bin)) of matched cells, by a dict over cell keys."""
+    recs = {}
+    for p, (q, t, y, use) in enumerate(zip(fp, times, ys, uses)):
+        n, _, B = use.shape
+        for i in range(n * 2 * B):
+            ti, c, b = np.unravel_index(i, use.shape)
+            qi = q[ti, c, b]
+            if not use[ti, c, b] or y[ti, c, b] <= 0 or not np.isfinite(qi).all():
+                continue
+            k = key_of(qi)
+            if k is not None:
+                recs.setdefault(k, []).append((p, t[ti], i))
+    out = set()
+    for k, rs in recs.items():
+        rs.sort(key=lambda r: (r[0], r[1]))
+        visits, cur = [], [rs[0]]
+        for prev, r in zip(rs[:-1], rs[1:]):
+            if r[0] != prev[0] or r[1] - prev[1] > gap:
+                visits.append(cur)
+                cur = []
+            cur.append(r)
+        visits.append(cur)
+        if len(visits) >= min_visits:
+            out |= {frozenset((p, i) for p, _, i in v) for v in visits}
+    return out
+
+
+def _visits_of(a):
+    """The visits of an assignment as sets of (pass, flat bin)."""
+    vis = {}
+    for p, u in enumerate(a.unit):
+        for i in np.flatnonzero(u.ravel() >= 0):
+            vis.setdefault(int(u.ravel()[i]), set()).add((p, int(i)))
+    return {frozenset(v) for v in vis.values()}
+
+
+def _random_bins(rng, extent=4.0):
+    """Two passes of random footprints over [-extent, extent]^2 (some NaN), times with a gap in pass 0."""
+    fp, times, ys, uses = [], [], [], []
+    for p, n in enumerate((12, 7)):
+        q = rng.uniform(-extent, extent, size=(n, 2, 6, 2))
+        q[rng.random((n, 2, 6)) < 0.1] = np.nan
+        fp.append(q)
+        t = np.arange(n) * 0.5 + 100.0 * p
+        t[n // 2:] += 30.0 * (p == 0)  # pass 0 comes back
+        times.append(t)
+        ys.append(rng.uniform(0.1, 2.0, size=(n, 2, 6)))
+        uses.append(rng.random((n, 2, 6)) < 0.9)
+    return fp, times, ys, uses
+
+
+def test_square_cells_are_the_default_and_unchanged():
+    rng = np.random.default_rng(5)
+    fp, times, ys, uses = _random_bins(rng)
+    rm = RatioMatch(cell=1.5, gap=5.0)
+    assert rm.cells == "square"
+    a = assign(fp, times, ys, uses, 1.0, rm)
+    ref = _brute_assign(fp, times, ys, uses, lambda q: tuple(np.floor(q / 1.5).astype(int)), 5.0, 2)
+    assert a.n_units > 10 and _visits_of(a) == ref
+    b = assign(fp, times, ys, uses, 1.0, RatioMatch(cell=1.5, gap=5.0, cells="square"))
+    assert all(np.array_equal(u, v) for u, v in zip(a.unit, b.unit))
+    np.testing.assert_array_equal(a.Y, b.Y)
+
+
+def test_ring_cells_group_bins_by_the_patch_of_their_face():
+    m = M.build(-3.0, 3.0, -3.0, 3.0, h=1.0, origin=(0.0, 0.0))
+    patch = M.ring_patches(m)
+    rng = np.random.default_rng(6)
+    fp, times, ys, uses = _random_bins(rng, extent=6.0)  # partly off the mesh
+    rm = RatioMatch(gap=5.0, cells="ring")
+    with pytest.raises(ValueError):
+        assign(fp, times, ys, uses, 1.0, rm)  # ring cells need the mesh
+    with pytest.raises(ValueError):
+        RatioMatch(cells="hex")
+    a = assign(fp, times, ys, uses, 1.0, rm, m)
+
+    def key_of(q):
+        tri, _, inside = M.locate(m, q)
+        return int(patch[int(tri)]) if bool(inside) else None
+
+    ref = _brute_assign(fp, times, ys, uses, key_of, 5.0, 2)
+    assert a.n_units > 10 and _visits_of(a) == ref
+    # off the mesh: never matched; the visits of one cell share its patch
+    for q, u in zip(fp, a.unit):
+        off = ~np.asarray(M.locate(m, np.nan_to_num(q, nan=1e3))[2])
+        assert (u[off] == -1).all()
+    cell_patch = {}
+    for p, (q, u) in enumerate(zip(fp, a.unit)):
+        on = u >= 0
+        tri = np.asarray(M.locate(m, q[on])[0])
+        for v, pt in zip(u[on], patch[tri]):
+            assert cell_patch.setdefault(int(a.unit_cell[v]), pt) == pt
+    assert len(set(cell_patch.values())) == a.n_cells
+    # Y sums the measured bins of each visit
+    Y = np.zeros(a.n_units)
+    for y, u in zip(ys, a.unit):
+        np.add.at(Y, u[u >= 0], y[u >= 0])
+    np.testing.assert_allclose(a.Y, Y)
+

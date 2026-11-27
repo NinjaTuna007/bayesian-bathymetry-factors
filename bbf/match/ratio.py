@@ -2,7 +2,10 @@ r"""Ratio match: views of the same ground must agree in the ratio of measured to
 
 The seabed's reflectivity :math:`\rho` multiplies every echo from a location, whichever pass sees it,
 and is unknown. Bins are grouped by where they land: each scored bin's footprint (`cells.footprint`,
-from the render at the current depths) falls in a square ground cell. Within a cell, the bins of one
+from the render at the current depths) falls in a ground cell: a square of side `RatioMatch.cell`, or
+with `RatioMatch.cells` = "ring" the one-ring hexagon of mesh faces its footprint lands in
+(`bbf.mesh.ring_patches`: the six faces around a vertex, so a cell follows the mesh, and its
+reflectivity is one per patch of faces). Within a cell, the bins of one
 *visit*, one pass seeing the cell in one continuous stretch (same pass, no gap longer than `gap`
 seconds, so a track that loops back over the cell is a second visit), sum to
 
@@ -62,15 +65,40 @@ import numpy as np
 import scipy.sparse as sp
 from jax.scipy.special import gammaln
 
+from bbf import mesh as M
+
 
 @dataclass(frozen=True)
 class RatioMatch:
     """Constants of the ratio match: cell side (m), gap (s) that ends a visit, visits a cell needs to be matched,
-    and the standard deviation of the model error on a visit's log prediction (0: speckle alone)."""
+    the standard deviation of the model error on a visit's log prediction (0: speckle alone), and the cells:
+    "square" of side `cell`, or "ring", the one-ring hexagons of the mesh faces (`bbf.mesh.ring_patches`, `cell`
+    unused)."""
     cell: float = 1.0
     gap: float = 5.0
     min_visits: int = 2
     model_sd: float = 0.0
+    cells: str = "square"
+
+    def __post_init__(self):
+        if self.cells not in ("square", "ring"):
+            raise ValueError(f"cells must be 'square' or 'ring', not {self.cells!r}")
+
+    def describe(self, mesh: M.Mesh | None = None) -> str:
+        """The cells in words, for the logs."""
+        if self.cells == "square":
+            return f"{self.cell} m cells"
+        return "one-ring cells" + ("" if mesh is None else f" of the {mesh.h} m mesh")
+
+
+def cell_keys(q: np.ndarray, rm: RatioMatch, mesh: M.Mesh | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """(key (k, j) int, on (k,) bool): the cell of each finite footprint q (k, 2); on: False off the mesh (ring cells)."""
+    if rm.cells == "square":
+        return np.floor(q / rm.cell).astype(np.int64), np.ones(len(q), bool)
+    if mesh is None:
+        raise ValueError("ring cells need the mesh")
+    tri, _, inside = (np.asarray(x) for x in M.locate(mesh, q))
+    return M.ring_patches(mesh)[tri][:, None], inside
 
 
 @dataclass(frozen=True, eq=False)
@@ -98,13 +126,17 @@ class RatioAssignment:
 
 
 def assign(footprints: list[np.ndarray], times: list[np.ndarray], ys: list[np.ndarray], uses: list[np.ndarray],
-           L: float, rm: RatioMatch) -> RatioAssignment:
-    """Cells and visits of the scored bins, from footprints per pass (n, 2, B, 2), ping times (n,), y and use (n, 2, B)."""
+           L: float, rm: RatioMatch, mesh: M.Mesh | None = None) -> RatioAssignment:
+    """Cells and visits of the scored bins, from footprints per pass (n, 2, B, 2), ping times (n,), y and use (n, 2, B).
+
+    Bins without a footprint, or (ring cells, which need the mesh) with one off the mesh, are left out.
+    """
     rec_pass, rec_t, rec_key, rec_flat, rec_y = [], [], [], [], []
     for p, (q, t, y, use) in enumerate(zip(footprints, times, ys, uses, strict=True)):
         ok = np.asarray(use, bool) & np.isfinite(q).all(axis=-1) & (np.asarray(y) > 0)
         idx = np.flatnonzero(ok.ravel())
-        key = np.floor(q.reshape(-1, 2)[idx] / rm.cell).astype(np.int64)
+        key, on = cell_keys(q.reshape(-1, 2)[idx], rm, mesh)
+        idx, key = idx[on], key[on]
         rec_pass.append(np.full(len(idx), p))
         rec_t.append(np.repeat(np.asarray(t, float), ok.shape[1] * ok.shape[2])[idx])
         rec_key.append(key)

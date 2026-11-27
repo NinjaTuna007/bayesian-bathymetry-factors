@@ -11,6 +11,7 @@ from .ratio import (
     RatioAssignment,
     RatioMatch,
     assign,
+    cell_keys,
     fisher_rows,
     log_ratio_match,
     visit_shapes,
@@ -18,6 +19,6 @@ from .ratio import (
 from .reflectivity import Reflectivity
 from .register import Offset, align_passes, level_footprints, offset_between, texture
 
-__all__ = ["Cells", "Offset", "RatioAssignment", "RatioMatch", "Reflectivity", "align_passes", "assign", "cell_residual",
-           "cell_sums", "fisher_rows", "footprint", "footprints", "level_footprints", "log_ratio_match", "log_ratio_pdf",
-           "offset_between", "ratio_score", "texture", "visit_shapes"]
+__all__ = ["Cells", "Offset", "RatioAssignment", "RatioMatch", "Reflectivity", "align_passes", "assign", "cell_keys",
+           "cell_residual", "cell_sums", "fisher_rows", "footprint", "footprints", "level_footprints", "log_ratio_match",
+           "log_ratio_pdf", "offset_between", "ratio_score", "texture", "visit_shapes"]
