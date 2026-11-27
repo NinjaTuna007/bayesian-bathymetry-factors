@@ -108,7 +108,8 @@ class RatioAssignment:
 
     unit: per pass (n, 2, B) int, the visit of each bin (-1: not in a matched cell); unit_cell (U,):
     the matched cell of each visit; Y (U,): measured sums; L: the bins' gamma shape; shape (U,): the
-    visits' shapes :math:`k_v`, held for the round (`visit_shapes`), or None to follow the predictions.
+    visits' shapes :math:`k_v`, held for the round (`visit_shapes`), or None to follow the predictions;
+    cell_key (C, j): each matched cell's key (`cell_keys`: the square's (i, j) or the ring's patch), for maps.
     """
     unit: list[np.ndarray]
     unit_cell: np.ndarray
@@ -116,6 +117,7 @@ class RatioAssignment:
     Y: np.ndarray
     L: float
     shape: np.ndarray | None = None
+    cell_key: np.ndarray | None = None
 
     @property
     def n_units(self) -> int:
@@ -147,7 +149,7 @@ def assign(footprints: list[np.ndarray], times: list[np.ndarray], ys: list[np.nd
     units = [np.full(np.asarray(u).shape, -1, dtype=np.int64) for u in uses]
     if len(rp) == 0:
         return RatioAssignment(units, np.zeros(0, np.int64), 0, np.zeros(0), L)
-    _, cell = np.unique(rk, axis=0, return_inverse=True)
+    keys, cell = np.unique(rk, axis=0, return_inverse=True)
     cell = cell.ravel()
     order = np.lexsort((rt, rp, cell))
     c, p, t = cell[order], rp[order], rt[order]
@@ -172,7 +174,7 @@ def assign(footprints: list[np.ndarray], times: list[np.ndarray], ys: list[np.nd
     Y = np.zeros(U)
     has = unit_of_rec >= 0
     np.add.at(Y, unit_of_rec[has], ry[has])
-    return RatioAssignment(units, cid[visit_cell[keep_visit]], int(keep_cell.sum()), Y, L)
+    return RatioAssignment(units, cid[visit_cell[keep_visit]], int(keep_cell.sum()), Y, L, cell_key=keys[keep_cell])
 
 
 def visit_shapes(Ibar: list, a: RatioAssignment, model_sd: float = 0.0) -> np.ndarray:
@@ -244,6 +246,28 @@ def log_ratio_match_padded(Ibar: list, aux: dict, cap_units: int, n_cell_segment
     has = K > 0
     cells = jnp.where(has, gammaln(jnp.where(has, K, 1.0)) - K * jnp.log(jnp.where(has, Z, 1.0)), 0.0)
     return jnp.sum(cells) - jnp.sum(gammaln(k)) + jnp.sum(k * jnp.log(z)) - jnp.sum(jnp.log(Y))
+
+
+def cell_reflectivity(Ibar: list, a: RatioAssignment) -> tuple[np.ndarray, np.ndarray]:
+    r"""Per matched cell (C,): the most likely log reflectivity and the spread of its visits about it.
+
+    Eq. (11) integrates the cell's reflectivity :math:`\kappa_\mathcal{H}` out; at given predictions
+    (per pass (n, 2, B), without the reflectivity) its most likely value is the shape-weighted mean of
+    the visits' ratios, :math:`\hat\kappa_\mathcal{H} = \sum_v L_v Y_v / \bar I_v \,/\, \sum_v L_v`.
+    The spread is the shape-weighted standard deviation of :math:`\log(Y_v / \bar I_v) - \log\hat\kappa_\mathcal{H}`:
+    where the passes disagree about the cell. A diagnostic; nothing of it enters the fit.
+    """
+    unit = np.concatenate([np.asarray(u).ravel() for u in a.unit])
+    I = np.concatenate([np.asarray(x, dtype=float).ravel() for x in Ibar])
+    on = unit >= 0
+    s1 = np.bincount(unit[on], I[on], a.n_units)
+    k = (a.L * s1**2 / np.bincount(unit[on], I[on] ** 2, a.n_units)) if a.shape is None else np.asarray(a.shape, float)
+    r = a.Y / s1
+    K = np.bincount(a.unit_cell, k, a.n_cells)
+    log_kappa = np.log(np.bincount(a.unit_cell, k * r, a.n_cells) / K)
+    dev = np.log(r) - log_kappa[a.unit_cell]
+    spread = np.sqrt(np.bincount(a.unit_cell, k * dev**2, a.n_cells) / K)
+    return log_kappa, spread
 
 
 def fisher_rows(Ibar: list, a: RatioAssignment):

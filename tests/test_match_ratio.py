@@ -511,3 +511,35 @@ def test_infer_with_visits_every_step_reassigns_and_ascends():
     assert any("last ratio assignment" in s for s in lines)
     pb = out["problem"]
     assert pb.ratio is not None and pb.ratio.shape is not None and pb.ratio_gain is not None
+
+
+def test_cell_reflectivity_recovers_each_cells_scale():
+    """When every visit of a cell measures its prediction times the same factor, that factor comes back with no
+    spread; one disagreeing visit gives a spread."""
+    from bbf.match.ratio import cell_reflectivity
+    a = _two_cells()
+    rng = np.random.default_rng(8)
+    Ib = [rng.uniform(0.5, 2.0, size=u.shape) for u in a.unit]
+    s1 = np.zeros(a.n_units)
+    for x, u in zip(Ib, a.unit):
+        np.add.at(s1, u[u >= 0], x[u >= 0])
+    kappa = np.array([3.0, 0.25])
+    a = dataclasses.replace(a, Y=s1 * kappa[a.unit_cell], shape=np.array([1.0, 2.0, 0.5, 3.0, 1.5]))
+    lk, sp = cell_reflectivity(Ib, a)
+    np.testing.assert_allclose(lk, np.log(kappa), rtol=1e-12)
+    np.testing.assert_allclose(sp, 0.0, atol=1e-12)
+    Y = a.Y.copy()
+    Y[1] *= 2.0
+    _, sp = cell_reflectivity(Ib, dataclasses.replace(a, Y=Y))
+    assert sp[0] > 0.1 and sp[1] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_assign_keeps_the_keys_of_the_matched_cells():
+    rng = np.random.default_rng(9)
+    fp, times, ys, uses = _random_bins(rng)
+    a = assign(fp, times, ys, uses, 1.0, RatioMatch(cell=1.0))
+    assert a.cell_key is not None and a.cell_key.shape == (a.n_cells, 2)
+    q = np.concatenate([f.reshape(-1, 2) for f in fp])
+    unit = np.concatenate([u.ravel() for u in a.unit])
+    on = unit >= 0
+    np.testing.assert_array_equal(np.floor(q[on]).astype(int), a.cell_key[a.unit_cell[unit[on]]])

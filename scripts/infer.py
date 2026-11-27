@@ -309,7 +309,8 @@ def main():
 
     assert out is not None
     save_depths(args.out, mesh, d, beta=beta, sd_d=out["sd_d"], sd_beta=out["sd_beta"], psi=out["psi"], **({} if xi is None else {"xi": xi}),
-                **{k: out[k] for k in ("sd_psi", "sd_xi") if k in out}, **state)
+                **{k: out[k] for k in ("sd_psi", "sd_xi", "cell_key", "log_kappa_cell", "cell_spread") if k in out},
+                **state)
     log(f"wrote {args.out}; total {(time.time() - t_start) / 60:.0f} min")
 
     # depth and uncertainty maps over the vertices the passes see

@@ -50,7 +50,7 @@ from bbf.inference.objective import (
 )
 from bbf.io import Pass
 from bbf.match import Reflectivity
-from bbf.match.ratio import RatioMatch, assign, visit_shapes
+from bbf.match.ratio import RatioMatch, assign, cell_reflectivity, visit_shapes
 from bbf.mesh import locate
 from bbf.ping.first_return import FirstReturn
 from bbf.ping.geometry import trace
@@ -390,6 +390,11 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         problem = dataclasses.replace(problem, theta=theta)  # with the final psi
     out = {"d": d, "beta": beta, "xi": xi, "theta": theta, "psi": psi_of(theta), "history": history,
            "problem": problem}
+    if problem is not None and problem.ratio is not None and problem.ratio.n_units and problem.ratio_gain is not None:
+        # the cells' reflectivity, integrated out of the fit, at the final depths: for maps
+        ra = problem.ratio
+        log_kappa, spread = cell_reflectivity(ratio_means(problem, render(problem, d), problem.ratio_gain), ra)
+        out.update(cell_key=ra.cell_key, log_kappa_cell=log_kappa, cell_spread=spread)
     if laplace_samples > 0 and problem is not None:
         t0 = time.time()
         Jb = beam_jacobian(problem, d, xi=xi) if problem.free_psi else None
