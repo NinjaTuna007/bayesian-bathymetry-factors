@@ -29,6 +29,7 @@ Gauss--Newton steps, while the Jacobians are retaken after every step.
 """
 import dataclasses
 import time
+from collections.abc import Sequence
 
 import jax.numpy as jnp
 import numpy as np
@@ -180,7 +181,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           refl: Reflectivity | None = None, xi0=None, first_return: FirstReturn | None = None,
           horizon: Horizon | None = None, label_floor: bool = True, callback=None,
           min_range: float = 0.0, fit_shape: bool = False, psi_held=None, mode_grid: int = 0,
-          shadow_stop: bool = True, temper: float = 1.0, field_steps: int | None = None,
+          shadow_stop: bool = True, temper: float | Sequence[float] = 1.0, field_steps: int | None = None,
           kappa_std: float | None = None, far_edge: bool = False, far_extent: float = 10.0,
           ratio: RatioMatch | None = None, coarse: float | None = None, slope_seen: bool = False,
           log=print) -> dict:
@@ -252,7 +253,9 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     log-:math:`\kappa` mode is the best found from a grid of starts, so the value does not depend on
     where the last evaluation left the modes (on the real data cold and warm values differed by
     as much as a Gauss--Newton step gains); with `shadow_stop` False the shadow factor's gradient
-    is that of its value; `temper` scales the intensity log likelihood.
+    is that of its value; `temper` scales the intensity log likelihood. A sequence of tempers is a
+    continuation: round :math:`r` uses entry :math:`\min(r, \text{len} - 1)`, so a schedule rising to 1
+    first fits a flattened likelihood whose ridges are wide enough for long steps, then sharpens it.
 
     ratio: match the passes by the ratio of measured to predicted intensity on shared ground cells
     (`bbf.match.ratio`, `with_ratio`) instead of through a reflectivity field: each round, once theta
@@ -311,7 +314,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
                 f"{sum(int((h & ~lab).sum()) for h, lab in zip(hz.use, labels))} of them dark")
         return theta, Problem(mesh=mesh, prior=prior, theta=theta, poses=poses, y=ys, labels=labels, u=u, dr=dr,
                               chunk=chunk, valid=valid, refl=refl, kappa_offset=offsets, first_return=first_return,
-                              horizon=hz, mode_grid=mode_grid, shadow_stop=shadow_stop, temper=temper)
+                              horizon=hz, mode_grid=mode_grid, shadow_stop=shadow_stop, temper=temper_at(0))
 
     def refit(theta, base, S, shape=False):
         """theta fitted at the render S on the subset of pings (`calibrate`); with shape, its gamma shape and spike rates too."""
@@ -321,6 +324,10 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
                                 for lab, val, s in zip(base.labels, base.valid, sub)])
         return calibrate(y_c, S_c, use_c, theta, dr, offset=np.concatenate([o[s] for o, s in zip(offsets, sub)]),
                          fit_shape=shape)
+
+    def temper_at(rnd: int) -> float:
+        """The temper of round rnd: the scalar, or the schedule's entry (its last beyond its end)."""
+        return float(temper) if np.isscalar(temper) else float(temper[min(rnd, len(temper) - 1)])
 
     for rnd in range(rounds):
         t0 = time.time()
@@ -345,7 +352,9 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
         if kappa_std is not None:
             log(f"round {rnd}: gains tied per side, sd {kappa_std} (fitted spread {np.asarray(theta.log_kappa_std).round(2)})")
             theta = dataclasses.replace(theta, log_kappa_std=kappa_std)
-        problem = dataclasses.replace(base, theta=theta, psi_prior=psi_prior, psi_held=psi_held)
+        problem = dataclasses.replace(base, theta=theta, psi_prior=psi_prior, psi_held=psi_held, temper=temper_at(rnd))
+        if not np.isscalar(temper):
+            log(f"round {rnd}: temper {temper_at(rnd)} (continuation)")
         if slope_seen and prior.slope is not None:  # the slope factor only where an intensity constrains the face
             faces = scored_faces(problem, d, batch=max(chunk, 32))
             problem = dataclasses.replace(problem, prior=dataclasses.replace(prior, slope_faces=faces))
