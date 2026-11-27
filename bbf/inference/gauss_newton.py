@@ -61,6 +61,7 @@ PSI_LO = np.array([np.radians(5.0), np.radians(10.0), -1.0])
 PSI_HI = np.array([np.radians(85.0), np.radians(120.0), 2.0])
 
 COARSE_MAX_STEP = 2.0  # largest change of a vertex's depth (m) in one coarse step
+COARSE_CAP_QUANTILE = 0.95  # the coarse step is scaled by this quantile of its |dd| on reached vertices, not the max
 
 
 def coarse_basis(mesh, spacing: float) -> sp.csc_matrix:
@@ -129,8 +130,9 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     relin: a function (d, :math:`\psi`, :math:`\xi`) returning (J, Jb) there, called after every accepted
     step; without it J and Jb stay frozen for the whole loop.
     coarse: grid spacing (m) of a coarse step taken on every other iteration (from the first) in
-    place of the damped one (`coarse_step`): scaled so that no vertex moves more than
-    `COARSE_MAX_STEP` (measured on the vertices the data reach; the others are clipped to it), halved up to three times until :math:`\ell` rises, and followed by the
+    place of the damped one (`coarse_step`): scaled so that the `COARSE_CAP_QUANTILE` quantile of
+    :math:`|\Delta d|` over the vertices the data reach is at most `COARSE_MAX_STEP`, every vertex then
+    clipped to it, halved up to three times until :math:`\ell` rises, and followed by the
     damped step if it never does. Without it the large-scale shape stays where the start put it.
 
     Stops after `max_iter` accepted steps, when an accepted step raises :math:`\ell` by less than
@@ -181,6 +183,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
         if free:
             scale[ip:ip + 6] = np.abs(g[ip:ip + 6]) / psi_limit
         accepted, new, pred, trial = False, ell, 0.0, {}
+        coarse_note = ""
         dd, db, dp, dx = np.zeros(n), np.zeros(nb), np.zeros((2, 3)), np.zeros(n)
         kind = "GN"
         if P is not None and it % 2 == 0:
@@ -189,11 +192,16 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             except CholmodNotPositiveDefiniteError:
                 delta = None
             if delta is not None:
-                # the cap is on the vertices the data reach: where only the prior acts a patch may ask for
-                # any change, and scaling the step by it would hold everything else back; those are clipped
-                big = float(np.max(np.abs(delta[:n][reach]))) if reach.any() else float(np.max(np.abs(delta[:n])))
+                # the cap is a high quantile over the vertices the data reach, not their maximum: a few barely
+                # reached vertices ask for far more than the rest, and scaling the whole step by them held the
+                # coarse move to centimeters (twinratio2: max 2 m, rms 0.03-0.08 m); they are clipped instead
+                a = np.abs(delta[:n][reach]) if reach.any() else np.abs(delta[:n])
+                q50, big, top = np.quantile(a, 0.5), np.quantile(a, COARSE_CAP_QUANTILE), float(a.max())
                 delta *= min(1.0, COARSE_MAX_STEP / max(big, 1e-12))
+                clipped = int(np.sum(np.abs(delta[:n]) > COARSE_MAX_STEP))
                 delta[:n] = np.clip(delta[:n], -COARSE_MAX_STEP, COARSE_MAX_STEP)
+                coarse_note = (f", raw |dd| median {q50:.2f} / q{COARSE_CAP_QUANTILE * 100:.0f} {big:.2f} / max {top:.2f} m, "
+                               f"{clipped} clipped")
                 for _ in range(4):
                     pred = predicted_gain(H, g, delta, lay)
                     new = value(problem, d + delta[:n], beta + delta[ib:ib + nb], Fw, u0=det["u"], psi=psi, keep=trial, xi=xi)
@@ -267,7 +275,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
         if field:
             extra += f", xi sd {xi.std():.2f}"
         if kind == "coarse":
-            extra += f", coarse, rms dd {float(np.sqrt(np.mean(dd**2))):.3f} m"
+            extra += f", coarse, rms dd {float(np.sqrt(np.mean(dd**2))):.3f} m{coarse_note}"
         log(f"  GN {it}: ell = {ell:.1f} (+{gain:.1f}, predicted +{pred:.1f}, ratio {rho:.2f}), max |dd| = {step:.3f} m, "
             f"lambda = {used:.1e}{extra}, {time.time() - t0:.0f}s")
         if gain < tol * abs(ell):
