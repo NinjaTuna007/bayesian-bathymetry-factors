@@ -56,7 +56,7 @@ from bbf.ping.factor import (
 )
 from bbf.ping.first_return import FirstReturn, first_return_term
 from bbf.ping.horizon import Horizon, horizon_term
-from bbf.ping.render import unit_intensity
+from bbf.ping.render import unit_intensity, unit_intensity_footprint
 from bbf.ping.shadow import log_shadow_side, ping_use
 from bbf.ping.theta import Theta, psi_of, render_key, render_theta, with_psi
 from bbf.prior import Prior
@@ -168,6 +168,20 @@ def _render_jit(key: tuple):
     return jax.jit(lambda d, poses, psi, xi: _render_chunk(key, d, poses, psi, xi))
 
 
+def _render_footprint_chunk(key: tuple, d, poses, psi, xi):
+    mesh, rkey, u_bytes, n_bins, dr = key
+    th = render_theta(rkey, psi)
+    u = np.frombuffer(u_bytes)
+    sides = [jax.vmap(lambda pose, side=side: unit_intensity_footprint(mesh, d, pose, side, th, u, n_bins, dr, xi))(poses)
+             for side in (0, 1)]
+    return jnp.stack([s[0] for s in sides], axis=1), jnp.stack([s[1] for s in sides], axis=1)
+
+
+@cache
+def _render_footprint_jit(key: tuple):
+    return jax.jit(lambda d, poses, psi, xi: _render_footprint_chunk(key, d, poses, psi, xi))
+
+
 @cache
 def _vjp_jit(key: tuple):
     def chunk_vjp(d, poses, psi, xi, g):
@@ -209,6 +223,26 @@ def render(problem: Problem, d, psi=None, xi=None) -> list[np.ndarray]:
             S[idx] = np.asarray(f(d, jnp.asarray(poses[padded]), psi, xi))[: len(idx)]
         out.append(S)
     return out
+
+
+def render_footprints(problem: Problem, d, psi=None, xi=None) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    r"""`render` and the bins' footprints (`bbf.match.cells.footprints`) from the same samples.
+
+    Returns (S per pass (n, 2, B), footprints per pass (n, 2, B, 2)): the ratio match takes both at a
+    round's start, and one pass over the samples is half the render.
+    """
+    pb = problem
+    f = _render_footprint_jit(_key(pb))
+    d, psi, xi = jnp.asarray(d), _psi(pb, psi), _xi(pb, xi)
+    S_out, q_out = [], []
+    for poses in pb.poses:
+        S, q = np.zeros((len(poses), 2, pb.n_bins)), np.zeros((len(poses), 2, pb.n_bins, 2))
+        for idx, padded in _chunks(len(poses), pb.chunk):
+            Sc, qc = f(d, jnp.asarray(poses[padded]), psi, xi)
+            S[idx], q[idx] = np.asarray(Sc)[: len(idx)], np.asarray(qc)[: len(idx)]
+        S_out.append(S)
+        q_out.append(q)
+    return S_out, q_out
 
 
 def beam_jacobian(problem: Problem, d, psi=None, xi=None) -> list[np.ndarray]:

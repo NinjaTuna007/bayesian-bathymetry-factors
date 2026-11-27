@@ -32,16 +32,13 @@ from scipy.special import betaln, ndtri_exp
 from scipy.stats import beta as beta_dist
 
 from bbf import mesh as M
-from bbf.ping.render import sample_weights, split_into_bins
+from bbf.ping.render import unit_intensity_footprint
 from bbf.ping.theta import Theta
 
 
 def footprint(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: int, dr: float, xi=None):
     r"""Footprint (n_bins, 2) of each bin of one side: the mean of :math:`q_k` under the render's weights; NaN without echo."""
-    w, r, q = sample_weights(mesh, d, pose, side, theta, u, dr, xi)
-    S = split_into_bins(r, w, n_bins, dr)
-    c = jnp.stack([split_into_bins(r, w * q[:, i], n_bins, dr) for i in (0, 1)], axis=-1)
-    return jnp.where(S[:, None] > 0, c / jnp.where(S > 0, S, 1.0)[:, None], jnp.nan)
+    return unit_intensity_footprint(mesh, d, pose, side, theta, u, n_bins, dr, xi)[1]
 
 
 def footprints(mesh: M.Mesh, d, poses, theta: Theta, u, n_bins: int, dr: float, xi=None) -> np.ndarray:

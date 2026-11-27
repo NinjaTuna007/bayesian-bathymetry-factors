@@ -424,3 +424,13 @@ def test_ring_cells_group_bins_by_the_patch_of_their_face():
         np.add.at(Y, u[u >= 0], y[u >= 0])
     np.testing.assert_allclose(a.Y, Y)
 
+
+def test_render_footprints_match_the_render_and_cells_footprints(problem):
+    pb, d0, _ = problem
+    S, fp = O.render_footprints(pb, d0)
+    for Sp, Rp in zip(S, O.render(pb, d0)):
+        np.testing.assert_allclose(Sp, Rp, rtol=1e-12, atol=0)
+    for qp, pp in zip(fp, pb.poses):
+        ref = Mt.footprints(pb.mesh, jnp.asarray(d0), pp, pb.theta, pb.u, pb.n_bins, pb.dr)
+        np.testing.assert_allclose(qp, ref, rtol=1e-12, atol=1e-12)
+        assert np.isfinite(qp).any() and np.array_equal(np.isnan(qp), np.isnan(ref))

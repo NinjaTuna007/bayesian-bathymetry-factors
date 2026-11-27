@@ -46,10 +46,10 @@ from bbf.inference.objective import (
     ratio_gains,
     ratio_means,
     render,
+    render_footprints,
 )
 from bbf.io import Pass
 from bbf.match import Reflectivity
-from bbf.match.cells import footprints
 from bbf.match.ratio import RatioMatch, assign, visit_shapes
 from bbf.mesh import locate
 from bbf.ping.first_return import FirstReturn
@@ -139,24 +139,24 @@ def with_ratio(problem: Problem, d, times: list[np.ndarray], rm: RatioMatch, log
 
     times: per pass (n,), the ping times that split a cell's bins of one pass into visits. Each scored
     bin (`Problem.uses_all`: valid lit blocks, past `min_range` and outside the echo's onset zone) is put
-    in the ground cell of its footprint at d (`bbf.match.cells.footprints`, at theta's beam); bins
-    without a footprint (no seabed echo) stay in the ping factor. Then, at the render at d, each
-    ping-side's gain (`objective.ratio_gains`) and each visit's shape with the model error
-    (`visit_shapes`), which the round holds: followed, the gains give gradients with no curvature
+    in the ground cell (`RatioMatch.cells`) of its footprint at d (`objective.render_footprints`, the
+    footprints of `bbf.match.cells.footprints` from the round's render at theta's beam); bins without a
+    footprint (no seabed echo), or for ring cells with one off the mesh, stay in the ping factor. Then, at
+    that render, each ping-side's gain (`objective.ratio_gains`) and each visit's shape with the model
+    error (`visit_shapes`), which the round holds: followed, the gains give gradients with no curvature
     behind them and the shapes let the factor widen itself.
     """
     pb = problem
     if pb.refl is not None:
         raise ValueError("the ratio match replaces the reflectivity field: give one of ratio and refl")
     t0 = time.time()
-    fp = [footprints(pb.mesh, jnp.asarray(d), P, pb.theta, pb.u, pb.n_bins, pb.dr) for P in pb.poses]
-    ra = assign(fp, times, pb.y, pb.uses_all(), float(pb.theta.L), rm)
+    S, fp = render_footprints(pb, d)  # one render gives both
+    ra = assign(fp, times, pb.y, pb.uses_all(), float(pb.theta.L), rm, pb.mesh)
     n_all = sum(int((u & (y > 0)).sum()) for u, y in zip(pb.uses_all(), pb.y))
     n_m = sum(int(m.sum()) for m in ra.matched())
     log(f"ratio match: {ra.n_cells} cells in {ra.n_units} visits, {n_m / max(n_all, 1):.0%} of the scored bins "
-        f"({n_m} of {n_all}; {rm.cell} m cells, {time.time() - t0:.0f}s)")
+        f"({n_m} of {n_all}; {rm.describe(pb.mesh)}, {time.time() - t0:.0f}s)")
     pb = dataclasses.replace(pb, ratio=ra)
-    S = render(pb, d)
     gains = ratio_gains(pb, S)
     k_v = visit_shapes(ratio_means(pb, S, gains), ra, rm.model_sd)
     if ra.n_units:

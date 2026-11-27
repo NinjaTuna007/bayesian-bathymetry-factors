@@ -79,6 +79,19 @@ def unit_intensity(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: in
     return split_into_bins(r, w, n_bins, dr)
 
 
+def unit_intensity_footprint(mesh: M.Mesh, d, pose, side: int, theta: Theta, u, n_bins: int, dr: float, xi=None):
+    r"""(:math:`S_b` (n_bins,), footprint (n_bins, 2)) of one side from one pass over the samples.
+
+    The footprint of bin :math:`b` is the mean location under its weights,
+    :math:`\bar q_b = \sum_k w_b(r_k)\, w_k q_k / \sum_k w_b(r_k)\, w_k`, NaN without echo
+    (`bbf.match.cells.footprint`).
+    """
+    w, r, q = sample_weights(mesh, d, pose, side, theta, u, dr, xi)
+    S = split_into_bins(r, w, n_bins, dr)
+    c = jnp.stack([split_into_bins(r, w * q[:, i], n_bins, dr) for i in (0, 1)], axis=-1)
+    return S, jnp.where(S[:, None] > 0, c / jnp.where(S > 0, S, 1.0)[:, None], jnp.nan)
+
+
 def unit_intensities(mesh: M.Mesh, d, poses, theta: Theta, u, n_bins: int, dr: float, xi=None):
     r"""Unit intensities (n, 2, n_bins) of both sides of every pose in poses (n, 6), mesh-local.
 
