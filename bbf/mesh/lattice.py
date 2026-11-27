@@ -115,6 +115,41 @@ def build(xmin: float, xmax: float, ymin: float, ymax: float, h: float, buffer: 
                 origin=(float(origin[0]), float(origin[1])), z_ref=float(z_ref))
 
 
+def ring_centers(mesh: Mesh) -> np.ndarray:
+    r"""Vertices (n,) that center the one-ring patches of `ring_patches`.
+
+    In skew coordinates :math:`(a, b) = (c - \lfloor r/2 \rfloor,\, r)` the vertex sits at
+    :math:`a (h, 0) + b (\tfrac{h}{2}, \tfrac{\sqrt{3}}{2} h)`, and the centers are the index-3 sublattice
+    :math:`a \equiv b \pmod 3`. The three vertices of every triangle, lower
+    :math:`(a, b), (a + 1, b), (a, b + 1)` or upper :math:`(a + 1, b + 1), (a, b + 1), (a + 1, b)`, have
+    :math:`a - b` in three different classes mod 3, so each face holds exactly one center and the
+    one-rings of the centers tile the plane.
+    """
+    r, c = np.divmod(np.arange(mesh.n_vertices), mesh.n_cols)
+    return (c - r // 2 - r) % 3 == 0
+
+
+def ring_patches(mesh: Mesh) -> np.ndarray:
+    r"""Patch (m,) of each face, numbered from 0: the one-ring hexagon of the center among its vertices (`ring_centers`).
+
+    A face exists only with its three vertices, so its center always exists; near the domain edge
+    its one-ring may be cut short, and the faces of a cut ring go to the nearest center, by face
+    centroid, whose ring is whole. Every patch holds one whole hexagon of 6 faces, plus the cut
+    faces next to it at the edge. With no whole ring (a mesh a few faces across) the cut rings stay.
+    """
+    from scipy.spatial import cKDTree
+
+    tris = mesh.triangles
+    center = tris[np.arange(len(tris)), np.argmax(ring_centers(mesh)[tris], axis=1)]
+    full = np.bincount(center, minlength=mesh.n_vertices) == 6
+    cut = ~full[center]
+    whole = np.flatnonzero(full)
+    if cut.any() and len(whole):
+        centroid = mesh.vertices[tris[cut]].mean(axis=1)
+        center[cut] = whole[cKDTree(mesh.vertices[whole]).query(centroid)[1]]
+    return np.unique(center, return_inverse=True)[1].ravel()
+
+
 def locate(mesh: Mesh, q):
     """Triangle and barycentric weights of local points q (..., 2).
 

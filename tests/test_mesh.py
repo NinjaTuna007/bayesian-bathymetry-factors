@@ -153,3 +153,58 @@ def test_seabed_point_uses_z_ref():
     P = np.asarray(M.seabed_point(m, d, q))
     np.testing.assert_allclose(P[:, :2], q)
     np.testing.assert_allclose(P[:, 2], 55.0 - plane(q), atol=1e-9)
+
+
+def _face_neighbors(tris):
+    """Pairs (k, 2) of faces that share an edge."""
+    e = np.sort(np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]]), axis=1)
+    f = np.tile(np.arange(len(tris)), 3)
+    order = np.lexsort((e[:, 1], e[:, 0]))
+    e, f = e[order], f[order]
+    same = (e[1:] == e[:-1]).all(axis=1)
+    return np.column_stack([f[:-1][same], f[1:][same]])
+
+
+@pytest.mark.parametrize("shape", [(2, 3), (5, 4), (9, 11), (12, 12), (15, 8)])
+def test_ring_patches_tile_the_faces(shape):
+    """Each face holds one center; whole hexagons of 6 faces around it; every patch edge-connected."""
+    import scipy.sparse as sp
+    from scipy.sparse.csgraph import connected_components
+
+    m = M.Mesh(h=1.0, x0=0.0, y0=0.0, n_rows=shape[0], n_cols=shape[1])
+    tris = m.triangles
+    centers = M.ring_centers(m)
+    assert (centers[tris].sum(axis=1) == 1).all()
+    patch = M.ring_patches(m)
+    assert patch.shape == (len(tris),) and patch.min() == 0
+    n_p = patch.max() + 1
+    size = np.bincount(patch, minlength=n_p)
+    assert (size > 0).all()
+    # a whole hexagon (all six faces around its center exist) lies in one patch; an interior one, whose
+    # six neighbor centers (skew offsets below, :math:`\sqrt{3} h` away) are whole too, is the patch
+    center_of = tris[np.arange(len(tris)), np.argmax(centers[tris], axis=1)]
+    whole = np.bincount(center_of, minlength=m.n_vertices) == 6
+    n_interior = 0
+    for c in np.flatnonzero(whole):
+        own = center_of == c
+        assert len(np.unique(patch[own])) == 1
+        r, col = divmod(int(c), m.n_cols)
+        a, b = col - r // 2, r
+        nbr = [(b + db, a + da + (b + db) // 2) for da, db in ((1, 1), (2, -1), (1, -2), (-1, -1), (-2, 1), (-1, 2))]
+        if all(0 <= rr < m.n_rows and 0 <= cc < m.n_cols and whole[rr * m.n_cols + cc] for rr, cc in nbr):
+            assert size[patch[own][0]] == 6
+            n_interior += 1
+    assert n_interior > 0 or min(shape) < 9
+    nb = _face_neighbors(tris)
+    keep = patch[nb[:, 0]] == patch[nb[:, 1]]
+    A = sp.coo_matrix((np.ones(keep.sum()), (nb[keep, 0], nb[keep, 1])), shape=(len(tris),) * 2)
+    n_comp, _ = connected_components(A, directed=False)
+    assert n_comp == n_p  # one component per patch
+
+
+def test_ring_patches_of_a_large_mesh_are_mostly_hexagons():
+    m = M.build(0.0, 40.0, 0.0, 30.0, h=1.0)
+    size = np.bincount(M.ring_patches(m))
+    assert (size >= 6).all()
+    assert np.mean(size == 6) > 0.8
+    assert size.sum() == len(m.triangles)
