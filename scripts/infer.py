@@ -3,7 +3,7 @@ r"""Bathymetry from side-scan sonar: inference on patches of the prototype's cac
 
 Usage: python scripts/infer.py PATCHES.npz [--patches-used A B] [--out runs/<name>.npz] [--hold-out N]
        [--levels K:ROUNDS:STEPS ...] [--temper TAU] [--free-beam] [--no-align] [--bank-start [--bank-top M]]
-       [--match {field,ratio} [--cell M] [--model-sd S]]
+       [--match {field,ratio} [--cells {square,ring}] [--cell M] [--model-sd S]]
 
 1. The later passes are moved horizontally onto the first's texture (`bbf.match.align_passes`:
    the navigation of passes minutes apart disagrees by metres, more than the reflectivity field's
@@ -36,9 +36,9 @@ Usage: python scripts/infer.py PATCHES.npz [--patches-used A B] [--out runs/<nam
    depend on the last evaluation and the gradient is the value's.
 
 With `--match ratio` the passes are matched by the ratio match instead (`bbf.match.ratio`): for
-ground cells of `--cell` m seen in several visits, only the ratio of measured to predicted intensity
-between the visits is scored, with the cell's reflectivity integrated out, so a reflectivity can
-explain only what the passes agree on; `--model-sd` is the model error on a visit's log prediction,
+ground cells (`--cells`: squares of `--cell` m, or the one-ring hexagons of the mesh's faces) seen in
+several visits, only the ratio of measured to predicted intensity between the visits is scored, with
+the cell's reflectivity integrated out, so a reflectivity can explain only what the passes agree on; `--model-sd` is the model error on a visit's log prediction,
 which caps each visit's shape. There is no field then, and :math:`\xi = 0`.
 
 Every saved state holds the level's sonar parameters (`scripts/theta_io.py`), the moves given to
@@ -142,7 +142,9 @@ def main():
     ap.add_argument("--match", choices=("field", "ratio"), default="field",
                     help="how the passes are matched: a shared log-reflectivity field, or the ratio of measured to "
                          "predicted intensity on shared ground cells (bbf.match.ratio)")
-    ap.add_argument("--cell", type=float, default=1.0, help="ratio match: side of a ground cell (m)")
+    ap.add_argument("--cells", choices=("square", "ring"), default="square",
+                    help="ratio match: square ground cells of side --cell, or the one-ring hexagons of the mesh faces")
+    ap.add_argument("--cell", type=float, default=1.0, help="ratio match: side of a square ground cell (m)")
     ap.add_argument("--model-sd", type=float, default=0.0,
                     help="ratio match: sd of the model error on a visit's log prediction (0: speckle alone)")
     ap.add_argument("--no-field", action="store_true",
@@ -264,9 +266,10 @@ def main():
         xi = np.asarray(load_depths(args.xi_from)[2]["xi"], dtype=float)
         refl = dataclasses.replace(refl, mean=xi)
         log(f"reflectivity from {args.xi_from}: sd {xi.std():.2f}, held with prior sd {args.sigma_xi}")
-    ratio = RatioMatch(cell=args.cell, model_sd=args.model_sd) if args.match == "ratio" else None
-    log(f"match: {args.match}" + (f" ({args.cell} m cells, model error sd {args.model_sd})" if ratio else ""))
-    state = {"moves": moves, "hold_out": args.hold_out, "match": args.match, "cell": args.cell, "model_sd": args.model_sd}
+    ratio = RatioMatch(cell=args.cell, model_sd=args.model_sd, cells=args.cells) if args.match == "ratio" else None
+    log(f"match: {args.match}" + (f" ({ratio.describe(mesh)}, model error sd {args.model_sd})" if ratio else ""))
+    state = {"moves": moves, "hold_out": args.hold_out, "match": args.match, "cells": args.cells, "cell": args.cell,
+             "model_sd": args.model_sd}
     for li, (k, rounds, inner) in enumerate(levels):
         cp = [coarsen_pass(p, k) for p in passes]
         th = coarsen_theta(theta, k, looks=shape)  # the first level starts from independent bins
