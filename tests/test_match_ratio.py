@@ -481,3 +481,33 @@ def test_a_rebound_data_term_equals_a_fresh_one(problem):
     assert v1 == pytest.approx(v2, rel=1e-12)
     np.testing.assert_allclose(g1, g2, rtol=1e-9, atol=1e-9 * np.abs(g2).max())
 
+
+def test_infer_with_visits_every_step_reassigns_and_ascends():
+    """With `per_step`, every accepted step is followed by a new assignment (logged with its jump), each step's own
+    gain is positive, and the run ends with the last assignment."""
+    from bbf.inference.loop import infer
+    from bbf.io import Pass
+    m = M.build(-50.0, 50.0, -12.0, 12.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = np.asarray(20.0 - 2.0 * np.exp(-((v[:, 0] - 2) ** 2 + v[:, 1] ** 2) / (2 * 4.0**2)))
+    th = P.Theta(noise=1e-7, L=5.0, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5)
+    n_bins, dr = 400, 0.1
+    u = P.u_grid(n_bins, dr, du=0.05)
+    rng = np.random.default_rng(5)
+    passes = []
+    for i, x0 in enumerate((-6.0, 6.0)):
+        poses = np.column_stack([np.full(9, x0), np.linspace(-4, 4, 9), np.full(9, -5.0), np.zeros((9, 3))])
+        S = np.asarray(P.unit_intensities(m, jnp.asarray(d_true), poses, th, u, n_bins, dr))
+        passes.append(Pass(name=f"x{x0}", poses=poses, y=rng.gamma(th.L, (S + 1e-7) / th.L), dr=dr,
+                           t=np.arange(9) * 0.1 + 100.0 * i))
+    beta = np.array([0.0, 0.0, 20.0])
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=beta, Sigma_beta=np.diag([0.01, 0.01, 4.0]))
+    lines = []
+    out = infer(passes, m, prior, th, np.full(m.n_vertices, 20.0), beta, u, rounds=1, inner=3, calib_every=3, chunk=9,
+                ratio=RatioMatch(cell=1.0, model_sd=0.3, per_step=True), coarse=8.0, log=lines.append)
+    steps = [h for r in out["history"] for h in r["gn"] if "rho" in h]
+    assert len(steps) >= 2 and all(h["gain"] > 0 for h in steps)
+    assert sum("reassigned (" in s for s in lines) == len(steps)
+    assert any("last ratio assignment" in s for s in lines)
+    pb = out["problem"]
+    assert pb.ratio is not None and pb.ratio.shape is not None and pb.ratio_gain is not None

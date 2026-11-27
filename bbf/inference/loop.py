@@ -151,17 +151,26 @@ def with_ratio(problem: Problem, d, times: list[np.ndarray], rm: RatioMatch, log
         raise ValueError("the ratio match replaces the reflectivity field: give one of ratio and refl")
     t0 = time.time()
     S, fp = render_footprints(pb, d)  # one render gives both
-    ra = assign(fp, times, pb.y, pb.uses_all(), float(pb.theta.L), rm, pb.mesh)
+    pb = ratio_from_render(pb, S, fp, times, rm)
+    ra = pb.ratio
+    assert ra is not None
     n_all = sum(int((u & (y > 0)).sum()) for u, y in zip(pb.uses_all(), pb.y))
     n_m = sum(int(m.sum()) for m in ra.matched())
     log(f"ratio match: {ra.n_cells} cells in {ra.n_units} visits, {n_m / max(n_all, 1):.0%} of the scored bins "
         f"({n_m} of {n_all}; {rm.describe(pb.mesh)}, {time.time() - t0:.0f}s)")
-    pb = dataclasses.replace(pb, ratio=ra)
+    if ra.n_units and ra.shape is not None:
+        log(f"ratio match shapes held, model error sd {rm.model_sd}: median {np.median(ra.shape):.1f}, "
+            f"largest {np.max(ra.shape):.1f}")
+    return pb
+
+
+def ratio_from_render(problem: Problem, S, fp, times: list[np.ndarray], rm: RatioMatch) -> Problem:
+    """The problem with the ratio assignment, gains and held shapes made at the render S and footprints fp (`with_ratio`)."""
+    pb = problem
+    ra = assign(fp, times, pb.y, pb.uses_all(), float(pb.theta.L), rm, pb.mesh)
+    pb = dataclasses.replace(pb, ratio=ra, ratio_gain=None)
     gains = ratio_gains(pb, S)
     k_v = visit_shapes(ratio_means(pb, S, gains), ra, rm.model_sd)
-    if ra.n_units:
-        log(f"ratio match shapes held, model error sd {rm.model_sd}: median {np.median(k_v):.1f}, "
-            f"largest {np.max(k_v):.1f}")
     return dataclasses.replace(pb, ratio=dataclasses.replace(ra, shape=k_v), ratio_gain=gains)
 
 
@@ -360,8 +369,19 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
             at = dataclasses.replace(pb, theta=with_psi(pb.theta, psi))
             return jacobians(at, d, xi), (beam_jacobian(pb, d, psi, xi=xi) if pb.free_psi else None)
 
+        reassign, latest = None, {"problem": problem}
+        if ratio is not None and ratio.per_step:
+            times = [p.t for p in passes]
+
+            def reassign(pb, d, S, fp, latest=latest):
+                latest["problem"] = ratio_from_render(pb, S, fp, times, ratio)
+                return latest["problem"]
+
         d, beta, psi, xi, hist = gauss_newton(problem, d, beta, J, Jb=Jb, xi=xi, max_iter=inner, relin=relin,
-                                                coarse=coarse, log=log)
+                                                coarse=coarse, reassign=reassign, log=log)
+        problem = latest["problem"]  # the last assignment, when it follows the steps
+        if reassign is not None and problem.ratio is not None:
+            log(f"round {rnd}: last ratio assignment: {problem.ratio.n_cells} cells in {problem.ratio.n_units} visits")
         theta = with_psi(theta, psi)
         history.append({"round": rnd, "gn": hist, "time": time.time() - t0})
         if callback is not None:

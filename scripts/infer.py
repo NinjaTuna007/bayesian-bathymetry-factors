@@ -142,6 +142,8 @@ def main():
     ap.add_argument("--match", choices=("field", "ratio"), default="field",
                     help="how the passes are matched: a shared log-reflectivity field, or the ratio of measured to "
                          "predicted intensity on shared ground cells (bbf.match.ratio)")
+    ap.add_argument("--visits-every-step", action="store_true", dest="per_step",
+                    help="ratio match: reassign cells and visits after every accepted step, not once a round")
     ap.add_argument("--cells", choices=("square", "ring"), default="square",
                     help="ratio match: square ground cells of side --cell, or the one-ring hexagons of the mesh faces")
     ap.add_argument("--cell", type=float, default=1.0, help="ratio match: side of a square ground cell (m)")
@@ -266,10 +268,11 @@ def main():
         xi = np.asarray(load_depths(args.xi_from)[2]["xi"], dtype=float)
         refl = dataclasses.replace(refl, mean=xi)
         log(f"reflectivity from {args.xi_from}: sd {xi.std():.2f}, held with prior sd {args.sigma_xi}")
-    ratio = RatioMatch(cell=args.cell, model_sd=args.model_sd, cells=args.cells) if args.match == "ratio" else None
+    ratio = (RatioMatch(cell=args.cell, model_sd=args.model_sd, cells=args.cells, per_step=args.per_step)
+             if args.match == "ratio" else None)
     log(f"match: {args.match}" + (f" ({ratio.describe(mesh)}, model error sd {args.model_sd})" if ratio else ""))
     state = {"moves": moves, "hold_out": args.hold_out, "match": args.match, "cells": args.cells, "cell": args.cell,
-             "model_sd": args.model_sd}
+             "visits_every_step": args.per_step, "model_sd": args.model_sd}
     for li, (k, rounds, inner) in enumerate(levels):
         cp = [coarsen_pass(p, k) for p in passes]
         th = coarsen_theta(theta, k, looks=shape)  # the first level starts from independent bins

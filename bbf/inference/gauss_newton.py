@@ -120,7 +120,7 @@ def predicted_gain(H, g, delta, lay: dict) -> float:
 
 def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_depths: bool = False,
                  max_iter: int = 10, tol: float = 1e-5, lam: float = 1e-3, max_tries: int = 10, relin=None,
-                 coarse: float | None = None, log=print):
+                 coarse: float | None = None, reassign=None, log=print):
     r"""Ascend :math:`\ell` from (d, :math:`\beta`, :math:`\psi`, :math:`\xi`); returns (d, :math:`\beta`, :math:`\psi`, :math:`\xi`, history).
 
     J: per-ping-side Jacobians J[p][t][c], taken at the start (with the :math:`\xi` columns
@@ -134,6 +134,11 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     :math:`|\Delta d|` over the vertices the data reach is at most `COARSE_MAX_STEP`, every vertex then
     clipped to it, halved up to three times until :math:`\ell` rises, and followed by the
     damped step if it never does. Without it the large-scale shape stays where the start put it.
+
+    reassign: a function (problem, d, S, footprints) returning the problem with a new ratio assignment
+    at d, called after every accepted step with the accepted trial's render; the step's gain and ratio
+    are measured within one assignment, and the change the new one makes at the same point is logged
+    as the jump. Without it the assignment stays the round's.
 
     Stops after `max_iter` accepted steps, when an accepted step raises :math:`\ell` by less than
     `tol` times :math:`|\ell|`, or when no damping within `max_tries` increases finds an ascent.
@@ -204,7 +209,8 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
                                f"{clipped} clipped")
                 for _ in range(4):
                     pred = predicted_gain(H, g, delta, lay)
-                    new = value(problem, d + delta[:n], beta + delta[ib:ib + nb], Fw, u0=det["u"], psi=psi, keep=trial, xi=xi)
+                    new = value(problem, d + delta[:n], beta + delta[ib:ib + nb], Fw, u0=det["u"], psi=psi, keep=trial, xi=xi,
+                                     footprints=reassign is not None)
                     if np.isfinite(new) and new > ell:
                         accepted, kind = True, "coarse"
                         dd, db = delta[:n], delta[ib:ib + nb]
@@ -240,7 +246,8 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
                 dp = np.clip(psi + delta[ip:ip + 6].reshape(2, 3), PSI_LO, PSI_HI) - psi
                 delta[ip:ip + 6] = dp.ravel()
             pred = predicted_gain(H, g, delta, lay)
-            new = value(problem, d + dd, beta + db, Fw, u0=det["u"], psi=psi + dp, keep=trial, xi=xi + dx)
+            new = value(problem, d + dd, beta + db, Fw, u0=det["u"], psi=psi + dp, keep=trial, xi=xi + dx,
+                         footprints=reassign is not None)
             if not np.isfinite(new):
                 log(f"  GN {it}: non-finite trial value at lambda = {lam:.1e}; damping more")
             elif new > ell:
@@ -256,7 +263,11 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
         rho = gain / pred if pred > 0 else np.nan
         if relin is not None:
             J, Jb = relin(d, psi, xi)
+        if reassign is not None:  # a new ratio assignment at the accepted depths, from the trial's own render
+            problem = reassign(problem, d, trial["S"], trial["fp"])
+            F, Fw = F.rebind(problem), Fw.rebind(problem)
         ell, (gd, gb), det = value_and_grad(problem, d, beta, Fw, u0=det["u"], psi=psi, S=trial["S"], xi=xi)
+        jump = ell - new  # the change of objective the new assignment makes at the same point (0 without one)
         if relin is not None and field:
             S0 = det["S"]
         used = lam
@@ -276,6 +287,8 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             extra += f", xi sd {xi.std():.2f}"
         if kind == "coarse":
             extra += f", coarse, rms dd {float(np.sqrt(np.mean(dd**2))):.3f} m{coarse_note}"
+        if reassign is not None:
+            extra += f", reassigned ({jump:+.1f})"
         log(f"  GN {it}: ell = {ell:.1f} (+{gain:.1f}, predicted +{pred:.1f}, ratio {rho:.2f}), max |dd| = {step:.3f} m, "
             f"lambda = {used:.1e}{extra}, {time.time() - t0:.0f}s")
         if gain < tol * abs(ell):

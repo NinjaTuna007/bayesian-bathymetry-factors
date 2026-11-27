@@ -79,6 +79,7 @@ class RatioMatch:
     min_visits: int = 2
     model_sd: float = 0.0
     cells: str = "square"
+    per_step: bool = False  # reassign cells and visits after every accepted Gauss--Newton step, not once a round
 
     def __post_init__(self):
         if self.cells not in ("square", "ring"):
@@ -86,9 +87,9 @@ class RatioMatch:
 
     def describe(self, mesh: M.Mesh | None = None) -> str:
         """The cells in words, for the logs."""
-        if self.cells == "square":
-            return f"{self.cell} m cells"
-        return "one-ring cells" + ("" if mesh is None else f" of the {mesh.h} m mesh")
+        kind = (f"{self.cell} m cells" if self.cells == "square"
+                else "one-ring cells" + ("" if mesh is None else f" of the {mesh.h} m mesh"))
+        return kind + (", visits every step" if self.per_step else "")
 
 
 def cell_keys(q: np.ndarray, rm: RatioMatch, mesh: M.Mesh | None = None) -> tuple[np.ndarray, np.ndarray]:
