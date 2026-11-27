@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-r"""Score twin runs against the seabed the twin was drawn from: error by distance from the tracks, and a figure.
+r"""Score runs against a known seabed: error by distance from the tracks, NEES, and a figure.
 
-Usage: python scripts/twin_eval.py TRUTH.npz PASSES.npz RUN.npz [RUN.npz ...] [--seen SEEN.npz] [--figure figs/<stem>_vs_truth.png]
+Usage: python scripts/twin_eval.py TRUTH.npz|POINTS.npy PASSES.npz RUN.npz [RUN.npz ...] [--seen SEEN.npz] [--nees]
+       [--figure figs/<stem>_vs_truth.png]
+
+The reference is the twin's truth (a state), or for real data the PingDSP 3DSS bathymetry as world points
+POINTS.npy (m, 3): their depths below the run's :math:`z_\mathrm{ref}` are averaged per mesh vertex over the points
+nearest it (within `REF_RADIUS` times the mesh side, at least `REF_MIN` points); vertices without enough points
+are left out of every band. The 3DSS only scores results here; nothing of it reaches the method.
 
 TRUTH.npz is the state whose depths (and field) made the twin's intensities, e.g. `runs/shore_day0707.npz`;
 each RUN.npz a state `scripts/infer.py` wrote on the twin, with its start `<stem>_start.npz` next to it.
@@ -37,11 +43,22 @@ from scipy.spatial import KDTree
 from bbf.io import load_depths
 from run_map import tracks_of
 
+REF_RADIUS, REF_MIN = 0.6, 3
 BANDS = ((0, 5), (5, 10), (10, 20), (20, 30), (30, 40), (40, 50))
 
 
 def rms(a):
     return float(np.sqrt(np.mean(a**2))) if len(a) else float("nan")
+
+
+def reference_on_mesh(points: np.ndarray, mesh) -> np.ndarray:
+    """Depth (n,) of the reference points averaged per nearest vertex; NaN where fewer than `REF_MIN` lie near."""
+    v = mesh.vertices + np.asarray(mesh.origin)
+    dist, near = KDTree(v).query(points[:, :2], distance_upper_bound=REF_RADIUS * mesh.h)
+    ok = np.isfinite(dist)
+    n = np.bincount(near[ok], minlength=len(v))
+    s = np.bincount(near[ok], mesh.z_ref - points[ok, 2], minlength=len(v))
+    return np.where(n >= REF_MIN, s / np.maximum(n, 1), np.nan)
 
 
 def load_run(path: Path, fallback_seen: Path | None, n: int):
@@ -64,10 +81,16 @@ def main():
     ap.add_argument("--figure", type=Path, nargs="?", const=True, help="write the figure (default figs/<stem>_vs_truth.png)")
     args = ap.parse_args()
 
-    mesh, dt, _ = load_depths(args.truth)
+    if args.truth.suffix == ".npy":
+        mesh = load_depths(args.runs[0])[0]
+        dt = reference_on_mesh(np.load(args.truth), mesh)
+        print(f"reference: 3DSS points on {np.isfinite(dt).sum()} of {len(dt)} vertices")
+    else:
+        mesh, dt, _ = load_depths(args.truth)
     tr = np.concatenate(tracks_of(args.passes_file))
     v = mesh.vertices + np.asarray(mesh.origin)
     dist = KDTree(tr).query(v)[0]
+    dist[~np.isfinite(dt)] = np.inf  # no reference there: out of every band
     runs = {}
     for path in args.runs:
         d0, d, sd, seen, src = runs[path] = load_run(path, args.seen, len(v))
