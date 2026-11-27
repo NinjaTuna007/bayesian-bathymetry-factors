@@ -11,6 +11,12 @@ when a scored bin of the fit lies over it, read from SEEN.npz (`count` per verte
 the truth's median depth, the share seen, the error rms on seen ground of start and fit (and the fit's
 median :math:`|d - d_\mathrm{true}|`), the same rms on unseen ground, and the median Laplace sd on each.
 
+With `--nees`, a second table per run: the per-vertex normalized squared error
+:math:`e_i = (d_i - d_{\mathrm{true},i})^2 / \sigma_i^2` with :math:`\sigma_i` the Laplace marginal sd, by band on
+seen and unseen ground: its mean and median, and the share of vertices with :math:`|d_i - d_{\mathrm{true},i}| \le
+1.96\,\sigma_i`. A consistent posterior has mean 1, median 0.45 and coverage 95 %. Only the marginal sds are
+saved, so this is the per-vertex (scalar) NEES, not the joint NEES of a set of vertices.
+
 "Seen" is taken at the fit's depths: where the fit is too deep its rays reach ground a real bank would hide,
 so the seen share is optimistic on wrong seabeds.
 
@@ -54,6 +60,7 @@ def main():
     ap.add_argument("passes_file", type=Path, metavar="PASSES.npz")
     ap.add_argument("runs", type=Path, nargs="+")
     ap.add_argument("--seen", type=Path, help="seen counts for runs without their own <stem>_seen.npz")
+    ap.add_argument("--nees", action="store_true", help="also the per-vertex depth NEES and 95 %% coverage by band")
     ap.add_argument("--figure", type=Path, nargs="?", const=True, help="write the figure (default figs/<stem>_vs_truth.png)")
     args = ap.parse_args()
 
@@ -76,6 +83,17 @@ def main():
         s = (dist < 50) & seen
         print(f"all seen < 50 m: {rms((d0 - dt)[s]):.2f} -> {rms((d - dt)[s]):.2f} m rms; "
               f"error removed {1 - rms((d - dt)[s]) / rms((d0 - dt)[s]):.0%}")
+        if args.nees:
+            e = (d - dt) ** 2 / sd**2
+            cover = np.abs(d - dt) <= 1.96 * sd
+            print("NEES     | seen: mean / median / 95% coverage   | unseen: mean / median / 95% coverage")
+            for lo, hi in BANDS + ((0, 50),):
+                k = (dist >= lo) & (dist < hi)
+                cols = []
+                for m in (k & seen, k & ~seen):
+                    cols.append(f"{e[m].mean():9.3g} / {np.median(e[m]):9.3g} / {cover[m].mean():6.1%}" if m.any()
+                                else f"{'-':>9} / {'-':>9} / {'-':>6}")
+                print(f"{lo:2d}-{hi:2d} m  | {cols[0]} | {cols[1]}")
 
     if args.figure:
         first = args.runs[0]
