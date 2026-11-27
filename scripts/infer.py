@@ -147,6 +147,9 @@ def main():
                     help="ratio match: sd of the model error on a visit's log prediction (0: speckle alone)")
     ap.add_argument("--no-field", action="store_true",
                     help="no log-reflectivity field: each ping-side keeps one reflectivity (its gain), the passes are not matched")
+    ap.add_argument("--slope-everywhere", action="store_true",
+                    help="apply the slope factor on every face (default: only on faces under a scored bin, "
+                         "so that unseen seabed is left to the Matern field and stays uncertain)")
     ap.add_argument("--coarse", type=float, default=None, metavar="M",
                     help="alternate the damped step with an undamped step on a depth grid of this spacing (m): moves large scales")
     ap.add_argument("--xi-from", type=Path, metavar="STATE.npz",
@@ -283,7 +286,7 @@ def main():
                     first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=args.hold_shape is None,
                     horizon=Horizon() if args.horizon else None, mode_grid=MODE_GRID, shadow_stop=False, temper=args.temper, field_steps=FIELD_STEPS,
                     kappa_std=args.kappa_std or None, far_edge=args.far_edge, far_extent=args.far_extent, ratio=ratio,
-                    coarse=args.coarse,
+                    coarse=args.coarse, slope_seen=not args.slope_everywhere,
                     log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]

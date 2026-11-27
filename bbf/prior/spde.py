@@ -154,6 +154,13 @@ class Prior:
     with :math:`G_f` the face's gradient operator; at a level `slope_at` (the default) it is the
     Gaussian factor's. `log_density` and `grad` are exact; with `slope_at` at the same point,
     :math:`-\Lambda u` is the gradient in :math:`u`.
+
+    slope_faces (m,), if given, switches the factor per face (1 on, 0 off; default on everywhere).
+    On a face no measurement constrains, the factor is the only local information and it acts as
+    a membrane: once the level is known anywhere, the pointwise standard deviation grows only
+    logarithmically with the distance from the data (0.14 m tens of metres away at :math:`s = 0.2`),
+    and neither the Gauss--Newton curvature nor the Laplace covariance sees the heavy tails. Off
+    there, the Matérn part alone governs: :math:`\sigma` within a few :math:`\rho`.
     """
     mesh: Mesh
     rho: float
@@ -165,6 +172,7 @@ class Prior:
     slope_nu: float | None = None
     slope_at: np.ndarray | None = field(default=None, compare=False, repr=False)
     design: np.ndarray | None = field(default=None, compare=False, repr=False)
+    slope_faces: np.ndarray | None = field(default=None, compare=False, repr=False)
 
     @property
     def n_beta(self) -> int:
@@ -173,14 +181,22 @@ class Prior:
     @cached_property
     def Lambda(self) -> sp.csc_matrix:
         Q = self.Lambda_matern
-        if self.slope is not None and self.slope_nu is None:
+        if self.slope is not None and self.slope_nu is None and self.slope_faces is None:
             Q = Q + stiffness(self.mesh) / (math.sqrt(3) / 4 * self.mesh.h**2 * self.slope**2)
         elif self.slope is not None:
-            gx, gy = self._face_gradient(np.zeros(self.mesh.n_vertices) if self.slope_at is None else self.slope_at)
-            w = self._slope_weights(gx, gy)
+            if self.slope_nu is None:
+                w = self._face_mask() / self.slope**2
+            else:
+                gx, gy = self._face_gradient(np.zeros(self.mesh.n_vertices) if self.slope_at is None else self.slope_at)
+                w = self._slope_weights(gx, gy)
             Gx, Gy = self._grad_rows
             Q = Q + Gx.T @ sp.diags(w) @ Gx + Gy.T @ sp.diags(w) @ Gy
         return sp.csc_matrix(Q)
+
+    def _face_mask(self) -> np.ndarray:
+        """1 on the faces that carry the slope factor, 0 on the others (all 1 without `slope_faces`)."""
+        m = len(self.mesh.triangles)
+        return np.ones(m) if self.slope_faces is None else np.asarray(self.slope_faces, dtype=float).reshape(m)
 
     @cached_property
     def Lambda_matern(self) -> sp.csc_matrix:
@@ -206,7 +222,7 @@ class Prior:
 
     def _slope_weights(self, gx, gy):
         nu, s = self.slope_nu, self.slope
-        return (nu + 2) / ((nu + 2) * s**2 + gx**2 + gy**2)
+        return self._face_mask() * (nu + 2) / ((nu + 2) * s**2 + gx**2 + gy**2)
 
     def at(self, d: np.ndarray, beta: np.ndarray) -> Self:
         r"""This prior with the heavy-tailed slope factor's curvature taken at (d, :math:`\beta`); itself otherwise."""
@@ -232,7 +248,7 @@ class Prior:
         if self.slope is not None and self.slope_nu is not None:
             gx, gy = self._face_gradient(u)
             nu = self.slope_nu
-            lt = -0.5 * (nu + 2) * np.sum(np.log1p((gx**2 + gy**2) / ((nu + 2) * self.slope**2)))
+            lt = -0.5 * (nu + 2) * np.sum(self._face_mask() * np.log1p((gx**2 + gy**2) / ((nu + 2) * self.slope**2)))
             return float(lt) - 0.5 * float(u @ (self.Lambda_matern @ u) + b @ self.P_beta @ b)
         return -0.5 * float(u @ (self.Lambda @ u) + b @ self.P_beta @ b)
 

@@ -90,6 +90,37 @@ def jacobians(problem: Problem, d, xi=None) -> list[list[list]]:
     return out
 
 
+def scored_faces(problem: Problem, d, batch: int = 512) -> np.ndarray:
+    r"""Faces (m,) under at least one bin the ping factor scores, at depths d.
+
+    Every curve sample of every ping-side falls in a range bin; the face under it counts when
+    that bin is scored (`Problem.uses`: lit, valid, and not beyond a far edge). The other faces
+    (in shadow, beyond the far edge, off the swath) are constrained by no intensity.
+    """
+    import jax
+
+    mesh, dr, nb = problem.mesh, problem.dr, problem.n_bins
+    u, dj, tris = jnp.asarray(problem.u), jnp.asarray(d, dtype=float), jnp.asarray(mesh.triangles)
+    hit = np.zeros(len(mesh.triangles), bool)
+    for c in (0, 1):
+        def one(pose, c=c):
+            q = trace(mesh, dj, pose, c, u)
+            tri, bary, inside = locate(mesh, q)
+            z = mesh.z_ref - jnp.sum(dj[tris[tri]] * bary, axis=-1)
+            r = jnp.sqrt(jnp.sum((q - pose[:2]) ** 2, axis=-1) + (z - pose[2]) ** 2)
+            return tri, inside, jnp.clip(jnp.rint(r / dr).astype(int), 0, nb - 1)
+
+        f = jax.jit(jax.vmap(one))
+        for poses, use in zip(problem.poses, problem.uses()):
+            for i in range(0, len(poses), batch):
+                P = np.asarray(poses[i:i + batch])
+                pad = np.concatenate([P, np.repeat(P[-1:], batch - len(P), axis=0)])  # one compiled shape
+                tri, inside, b = (np.asarray(a)[: len(P)] for a in f(jnp.asarray(pad)))
+                ok = inside & np.take_along_axis(np.asarray(use)[i:i + batch, c], b, axis=1)
+                hit[tri[ok]] = True
+    return hit
+
+
 def observed_vertices(problem: Problem, d) -> np.ndarray:
     """Vertices (n,) touched by some ping-side's curve at depths d."""
     mesh = problem.mesh
@@ -142,7 +173,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           min_range: float = 0.0, fit_shape: bool = False, psi_held=None, mode_grid: int = 0,
           shadow_stop: bool = True, temper: float = 1.0, field_steps: int | None = None,
           kappa_std: float | None = None, far_edge: bool = False, far_extent: float = 10.0,
-          ratio: RatioMatch | None = None, coarse: float | None = None, log=print) -> dict:
+          ratio: RatioMatch | None = None, coarse: float | None = None, slope_seen: bool = False,
+          log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -194,6 +226,10 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     (`scored_blocks`). Beyond the edge the intensity is reverberation, still far above the water
     column's floor: against that floor it was labelled lit seabed, which only a dark reflectivity
     or a loose likelihood could explain.
+
+    slope_seen: apply the prior's slope factor only on the faces under a scored bin (`scored_faces`,
+    taken each round at the current depths; `bbf.prior.Prior.slope_faces`). Elsewhere it is the
+    only local information and holds unseen seabed at the level of the nearest data to centimetres.
 
     coarse: grid spacing (m) of the coarse depth step that alternates with the damped one
     (`bbf.inference.gauss_newton.gauss_newton`); None: damped steps only.
@@ -301,6 +337,10 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
             log(f"round {rnd}: gains tied per side, sd {kappa_std} (fitted spread {np.asarray(theta.log_kappa_std).round(2)})")
             theta = dataclasses.replace(theta, log_kappa_std=kappa_std)
         problem = dataclasses.replace(base, theta=theta, psi_prior=psi_prior, psi_held=psi_held)
+        if slope_seen and prior.slope is not None:  # the slope factor only where an intensity constrains the face
+            faces = scored_faces(problem, d, batch=max(chunk, 32))
+            problem = dataclasses.replace(problem, prior=dataclasses.replace(prior, slope_faces=faces))
+            log(f"round {rnd}: slope factor on {faces.mean():.0%} of the faces (those under a scored bin)")
         # 2. Jacobians, 3. Gauss-Newton
         tj = time.time()
         if rnd == 0 and trend_search is not None:

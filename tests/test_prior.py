@@ -252,3 +252,36 @@ def test_bowl_design_rises_to_a_rim_and_enters_the_prior():
     # the bowl itself is the trend: it costs only the coefficient's prior
     np.testing.assert_allclose(pr.log_density(d, beta), pr.log_density(X @ pr.mu_beta, pr.mu_beta) - 0.5 * 8.0**2 / 100.0)
     assert pr.joint_precision().shape == (m.n_vertices + 2, m.n_vertices + 2)
+
+
+def test_slope_faces_switch_the_factor_per_face():
+    from bbf import mesh as M
+    from bbf.prior import Prior
+
+    m = M.build(0.0, 12.0, 0.0, 8.0, h=1.0)
+    rng = np.random.default_rng(3)
+    d = 10.0 + rng.normal(0, 0.3, m.n_vertices)
+    beta = np.array([10.0])
+    kw = {"mu_beta": np.array([10.0]), "Sigma_beta": np.array([[100.0]])}
+    nf = len(m.triangles)
+    for nu in (None, 1.0):
+        full = Prior(m, 5.0, 8.0, slope=0.2, slope_nu=nu, **kw)
+        ones = Prior(m, 5.0, 8.0, slope=0.2, slope_nu=nu, slope_faces=np.ones(nf, bool), **kw)
+        none = Prior(m, 5.0, 8.0, slope=0.2, slope_nu=nu, slope_faces=np.zeros(nf, bool), **kw)
+        plain = Prior(m, 5.0, 8.0, **kw)
+        np.testing.assert_allclose(ones.log_density(d, beta), full.log_density(d, beta), rtol=1e-10)  # all on: the factor as before
+        np.testing.assert_allclose(ones.Lambda.toarray(), full.Lambda.toarray(), atol=1e-8)
+        np.testing.assert_allclose(none.log_density(d, beta), plain.log_density(d, beta), rtol=1e-10)  # all off: the Matern part alone
+        np.testing.assert_allclose(none.at(d, beta).Lambda.toarray(), plain.Lambda.toarray(), atol=1e-10)
+        half = np.zeros(nf, bool)
+        half[: nf // 2] = True
+        pr = Prior(m, 5.0, 8.0, slope=0.2, slope_nu=nu, slope_faces=half, **kw)
+        g = pr.grad(d, beta)[0]
+        eps, num = 1e-6, np.zeros(m.n_vertices)
+        for i in range(0, m.n_vertices, 7):
+            e = np.zeros(m.n_vertices)
+            e[i] = eps
+            num[i] = (pr.log_density(d + e, beta) - pr.log_density(d - e, beta)) / (2 * eps)
+        np.testing.assert_allclose(g[::7], num[::7], rtol=1e-5, atol=1e-6)
+        assert plain.log_density(d, beta) > pr.log_density(d, beta) > full.log_density(d, beta)
+        assert pr.at(d, beta).slope_faces is half  # carried through the reweighting

@@ -130,7 +130,7 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
     step; without it J and Jb stay frozen for the whole loop.
     coarse: grid spacing (m) of a coarse step taken on every other iteration (from the first) in
     place of the damped one (`coarse_step`): scaled so that no vertex moves more than
-    `COARSE_MAX_STEP`, halved up to three times until :math:`\ell` rises, and followed by the
+    `COARSE_MAX_STEP` (measured on the vertices the data reach; the others are clipped to it), halved up to three times until :math:`\ell` rises, and followed by the
     damped step if it never does. Without it the large-scale shape stays where the start put it.
 
     Stops after `max_iter` accepted steps, when an accepted step raises :math:`\ell` by less than
@@ -189,7 +189,11 @@ def gauss_newton(problem: Problem, d, beta, J, Jb=None, psi=None, xi=None, hold_
             except CholmodNotPositiveDefiniteError:
                 delta = None
             if delta is not None:
-                delta *= min(1.0, COARSE_MAX_STEP / max(float(np.max(np.abs(delta[:n]))), 1e-12))
+                # the cap is on the vertices the data reach: where only the prior acts a patch may ask for
+                # any change, and scaling the step by it would hold everything else back; those are clipped
+                big = float(np.max(np.abs(delta[:n][reach]))) if reach.any() else float(np.max(np.abs(delta[:n])))
+                delta *= min(1.0, COARSE_MAX_STEP / max(big, 1e-12))
+                delta[:n] = np.clip(delta[:n], -COARSE_MAX_STEP, COARSE_MAX_STEP)
                 for _ in range(4):
                     pred = predicted_gain(H, g, delta, lay)
                     new = value(problem, d + delta[:n], beta + delta[ib:ib + nb], Fw, u0=det["u"], psi=psi, keep=trial, xi=xi)
