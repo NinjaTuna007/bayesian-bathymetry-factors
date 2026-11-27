@@ -58,7 +58,7 @@ import numpy as np
 import tvg_theta as TVG
 from prototype_theta import EPS, L_SHAPE
 from scipy.spatial import cKDTree
-from theta_io import theta_arrays
+from theta_io import theta_arrays, theta_from
 
 from bbf import prior as PR
 from bbf.inference import init as I
@@ -125,6 +125,8 @@ def main():
                     help="bins averaged, rounds and Gauss-Newton steps per level (default 27:1:6 9:1:6 3:2:6)")
     ap.add_argument("--temper", type=float, nargs="+", default=[1.0], metavar="TAU",
                     help="factor on the intensity log likelihood; several: one per round (continuation), the last repeated")
+    ap.add_argument("--init", type=Path, default=None, metavar="STATE",
+                    help="continue from a saved state of the same data and mesh: its depths, trend and parameters")
     ap.add_argument("--bank-start", action="store_true",
                     help="raise a bank in the start where a ping's other side echoes earlier (default: the later echo alone)")
     ap.add_argument("--bank-top", type=float, default=None, metavar="M",
@@ -257,13 +259,25 @@ def main():
     d = I.depths_from_points(mesh, pts, prior_of(beta))
     log(f"first-echo start: {n_nadir} points below the tracks and {len(pts) - n_nadir} on banks, trend {np.round(beta, 3)}, "
         f"depth {np.percentile(d, 5):.1f}..{np.percentile(d, 95):.1f} m")
+    shape, eps = None, None
+    if args.init is not None:  # continue a saved run: its depths, trend, and the parameters of its last level
+        mesh0, d0, ex = load_depths(args.init)
+        assert (mesh0.n_rows, mesh0.n_cols, mesh0.h) == (mesh.n_rows, mesh.n_cols, mesh.h), "--init: another mesh"
+        k0, to = int(ex["k"]), theta_from(ex)
+        d, beta = np.asarray(d0, dtype=float), np.asarray(ex["beta"], dtype=float)
+        theta = dataclasses.replace(theta, eta=np.asarray(to.eta) * k0, zeta=np.asarray(to.zeta) * k0, ell=to.ell,
+                                    log_kappa_mean=to.log_kappa_mean, log_kappa_std=to.log_kappa_std,
+                                    beta0=to.beta0, omega=to.omega, gain_db=to.gain_db)
+        shape, eps = float(to.L), np.asarray(to.eps)
+        log(f"continuing from {args.init} (level k = {k0}): depth {np.percentile(d, 5):.1f}..{np.percentile(d, 95):.1f} m, "
+            f"shape {shape:.2f}, spike rates {eps.round(3)}")
     psi_prior = (psi_of(theta), PSI_SD)
     psi_held = PSI_FREE_BEAM if args.free_beam else np.ones((2, 3), bool)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     save_depths(args.out.with_name(args.out.stem + "_start.npz"), mesh, d, beta=beta)
 
     # coarse to fine
-    out, xi, shape, eps = None, None, None, None
+    out, xi = None, None
     refl = None if args.no_field or args.match != "field" else Reflectivity(mesh, args.rho_xi, args.sigma_xi)
     if args.xi_from is not None and refl is not None:  # the field starts at, and has as its prior mean, a saved one
         xi = np.asarray(load_depths(args.xi_from)[2]["xi"], dtype=float)
