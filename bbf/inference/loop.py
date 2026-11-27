@@ -142,7 +142,7 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
           min_range: float = 0.0, fit_shape: bool = False, psi_held=None, mode_grid: int = 0,
           shadow_stop: bool = True, temper: float = 1.0, field_steps: int | None = None,
           kappa_std: float | None = None, far_edge: bool = False, far_extent: float = 10.0,
-          ratio: RatioMatch | None = None, log=print) -> dict:
+          ratio: RatioMatch | None = None, coarse: float | None = None, log=print) -> dict:
     r"""Run the outer loop from (d0, beta0); returns depths, trend, reflectivity, theta and history.
 
     refl: the prior of the log-reflectivity field :math:`\xi`; with it, :math:`\xi` is an unknown of
@@ -194,6 +194,9 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
     (`scored_blocks`). Beyond the edge the intensity is reverberation, still far above the water
     column's floor: against that floor it was labelled lit seabed, which only a dark reflectivity
     or a loose likelihood could explain.
+
+    coarse: grid spacing (m) of the coarse depth step that alternates with the damped one
+    (`bbf.inference.gauss_newton.gauss_newton`); None: damped steps only.
 
     kappa_std: ties the per-ping gains of a side: the standard deviation of every :math:`\log\kappa_{t,c}`
     about its side's mean (refitted each round, shifted by the known transmit power) is held at this
@@ -317,7 +320,8 @@ def infer(passes: list[Pass], mesh: M.Mesh, prior: Prior, theta: Theta, d0, beta
             at = dataclasses.replace(pb, theta=with_psi(pb.theta, psi))
             return jacobians(at, d, xi), (beam_jacobian(pb, d, psi, xi=xi) if pb.free_psi else None)
 
-        d, beta, psi, xi, hist = gauss_newton(problem, d, beta, J, Jb=Jb, xi=xi, max_iter=inner, relin=relin, log=log)
+        d, beta, psi, xi, hist = gauss_newton(problem, d, beta, J, Jb=Jb, xi=xi, max_iter=inner, relin=relin,
+                                                coarse=coarse, log=log)
         theta = with_psi(theta, psi)
         history.append({"round": rnd, "gn": hist, "time": time.time() - t0})
         if callback is not None:

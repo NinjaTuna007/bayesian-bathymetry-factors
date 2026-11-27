@@ -64,7 +64,7 @@ from bbf import prior as PR
 from bbf.inference import init as I
 from bbf.inference.loop import infer
 from bbf.inference.multiscale import coarsen_pass, coarsen_theta
-from bbf.io import Pass, load_patch, save_depths
+from bbf.io import Pass, load_depths, load_patch, save_depths
 from bbf.match import RatioMatch, Reflectivity, align_passes
 from bbf.ping import Theta, psi_of, u_grid
 from bbf.ping.first_return import FirstReturn
@@ -147,6 +147,11 @@ def main():
                     help="ratio match: sd of the model error on a visit's log prediction (0: speckle alone)")
     ap.add_argument("--no-field", action="store_true",
                     help="no log-reflectivity field: each ping-side keeps one reflectivity (its gain), the passes are not matched")
+    ap.add_argument("--coarse", type=float, default=None, metavar="M",
+                    help="alternate the damped step with an undamped step on a depth grid of this spacing (m): moves large scales")
+    ap.add_argument("--xi-from", type=Path, metavar="STATE.npz",
+                    help="start the reflectivity at this saved state's field and take it as the prior mean "
+                         "(with a small --sigma-xi: the field held, e.g. at a synthetic truth)")
     ap.add_argument("--rho-xi", type=float, default=RHO_XI, help="range of the log-reflectivity field (m)")
     ap.add_argument("--hold-shape", type=float, metavar="L",
                     help="gamma shape of the bins at every level, held instead of fitted")
@@ -252,6 +257,10 @@ def main():
     # coarse to fine
     out, xi, shape, eps = None, None, None, None
     refl = None if args.no_field or args.match != "field" else Reflectivity(mesh, args.rho_xi, args.sigma_xi)
+    if args.xi_from is not None and refl is not None:  # the field starts at, and has as its prior mean, a saved one
+        xi = np.asarray(load_depths(args.xi_from)[2]["xi"], dtype=float)
+        refl = dataclasses.replace(refl, mean=xi)
+        log(f"reflectivity from {args.xi_from}: sd {xi.std():.2f}, held with prior sd {args.sigma_xi}")
     ratio = RatioMatch(cell=args.cell, model_sd=args.model_sd) if args.match == "ratio" else None
     log(f"match: {args.match}" + (f" ({args.cell} m cells, model error sd {args.model_sd})" if ratio else ""))
     state = {"moves": moves, "hold_out": args.hold_out, "match": args.match, "cell": args.cell, "model_sd": args.model_sd}
@@ -274,6 +283,7 @@ def main():
                     first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=args.hold_shape is None,
                     horizon=Horizon() if args.horizon else None, mode_grid=MODE_GRID, shadow_stop=False, temper=args.temper, field_steps=FIELD_STEPS,
                     kappa_std=args.kappa_std or None, far_edge=args.far_edge, far_extent=args.far_extent, ratio=ratio,
+                    coarse=args.coarse,
                     log=log, **extra)
         d, beta, xi = out["d"], out["beta"], out["xi"]
         to = out["theta"]
