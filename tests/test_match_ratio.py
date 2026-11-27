@@ -434,3 +434,50 @@ def test_render_footprints_match_the_render_and_cells_footprints(problem):
         ref = Mt.footprints(pb.mesh, jnp.asarray(d0), pp, pb.theta, pb.u, pb.n_bins, pb.dr)
         np.testing.assert_allclose(qp, ref, rtol=1e-12, atol=1e-12)
         assert np.isfinite(qp).any() and np.array_equal(np.isnan(qp), np.isnan(ref))
+
+
+def test_padded_ratio_match_equals_the_plain_one():
+    """With held shapes, the fixed-size form gives the same value and gradient, whatever the padding."""
+    import jax
+    from bbf.match.ratio import log_ratio_match_padded, padded
+    a = dataclasses.replace(_two_cells(), shape=np.array([1.1, 2.0, 0.7, 3.0, 1.4]))
+    rng = np.random.default_rng(6)
+    Ib = [jnp.asarray(rng.uniform(0.5, 2.0, size=u.shape)) for u in a.unit]
+    base, g = jax.value_and_grad(lambda I: log_ratio_match(I, a))(Ib)
+    for caps in ((5, 2), (9, 4), (40, 30)):
+        aux = padded(a, *caps)
+        val, gp = jax.value_and_grad(lambda I: log_ratio_match_padded(I, aux, caps[0], caps[0] + caps[1]))(Ib)
+        assert float(val) == pytest.approx(float(base), rel=1e-12)
+        for x, y in zip(g, gp):
+            np.testing.assert_allclose(np.asarray(y), np.asarray(x), rtol=1e-10, atol=1e-14)
+    with pytest.raises(ValueError):
+        padded(a, 4, 2)
+
+
+def test_a_rebound_data_term_equals_a_fresh_one(problem):
+    """`DataTerm.rebind` with a new assignment gives the value and gradient of a term built for it, without a new
+    compile while the assignment fits the capacity."""
+    pb, d0, beta = problem
+    S = O.render(pb, d0)
+    held = dataclasses.replace(pb, ratio_gain=O.ratio_gains(pb, S))
+    held = dataclasses.replace(held, ratio=dataclasses.replace(
+        held.ratio, shape=Mt.ratio.visit_shapes(O.ratio_means(held, S, held.ratio_gain), held.ratio, 0.3)))
+    F = O.data_term(held, warm=True)
+    # a new assignment: the footprints at other depths
+    d1 = d0 + 0.4 * np.cos(pb.mesh.vertices[:, 0] / 4.0)
+    S1, fp1 = O.render_footprints(held, d1)
+    times = [np.arange(5) * 0.1, np.arange(5) * 0.1 + 100.0]
+    ra = assign(fp1, times, held.y, held.uses_all(), held.theta.L, RatioMatch(cell=1.0))
+    new = dataclasses.replace(held, ratio=ra, ratio_gain=None)
+    gains = O.ratio_gains(new, S1)
+    shape = Mt.ratio.visit_shapes(O.ratio_means(new, S1, gains), ra, 0.3)
+    new = dataclasses.replace(new, ratio=dataclasses.replace(ra, shape=shape), ratio_gain=gains)
+    assert new.ratio.n_units != held.ratio.n_units or not np.array_equal(new.ratio.unit_cell, held.ratio.unit_cell)
+    G = F.rebind(new)
+    assert G.core is F.core  # the same compiled function
+    fresh = O.data_term(new, warm=True)
+    v1, (g1, _), _ = O.value_and_grad(new, d1, beta, G, S=S1)
+    v2, (g2, _), _ = O.value_and_grad(new, d1, beta, fresh, S=S1)
+    assert v1 == pytest.approx(v2, rel=1e-12)
+    np.testing.assert_allclose(g1, g2, rtol=1e-9, atol=1e-9 * np.abs(g2).max())
+

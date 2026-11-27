@@ -207,6 +207,44 @@ def log_ratio_match(Ibar: list, a: RatioAssignment):
     return total
 
 
+def padded(a: RatioAssignment, cap_units: int, cap_cells: int) -> dict:
+    r"""The held assignment as fixed-size arrays for `log_ratio_match_padded`, so a new one needs no new compile.
+
+    Visits beyond `a.n_units` up to `cap_units` are dummies, each alone in a cell of its own after the real
+    ones, with :math:`k = Y = 1` and their predicted sum set to 1: a cell of one visit contributes
+    :math:`\log\Gamma(k) - \log\Gamma(k) + k \log z - k \log z - \log Y = 0`. Cell segments number
+    `cap_cells + cap_units`; unused ones are empty and skipped.
+    """
+    if a.shape is None:
+        raise ValueError("the padded form needs the held shapes")
+    U, C = a.n_units, a.n_cells
+    if U > cap_units or C > cap_cells:
+        raise ValueError(f"assignment ({U} visits, {C} cells) exceeds the capacity ({cap_units}, {cap_cells})")
+    pad = cap_units - U
+    return {"unit": [jnp.asarray(u) for u in a.unit],
+            "unit_cell": jnp.asarray(np.concatenate([a.unit_cell, C + np.arange(pad)]).astype(np.int32)),
+            "Y": jnp.asarray(np.concatenate([a.Y, np.ones(pad)])),
+            "k": jnp.asarray(np.concatenate([np.asarray(a.shape, dtype=float), np.ones(pad)])),
+            "real": jnp.asarray(np.arange(cap_units) < U)}
+
+
+def log_ratio_match_padded(Ibar: list, aux: dict, cap_units: int, n_cell_segments: int):
+    r"""`log_ratio_match` with held shapes on the fixed-size arrays of `padded`; JAX, compiled once per capacity."""
+    unit = jnp.concatenate([jnp.ravel(u) for u in aux["unit"]])
+    I = jnp.concatenate([jnp.ravel(x) for x in Ibar])
+    on = unit >= 0
+    seg = jnp.where(on, unit, 0)
+    s1 = jax.ops.segment_sum(jnp.where(on, I, 0.0), seg, cap_units)
+    s1 = jnp.where(aux["real"], s1, 1.0)
+    k, Y, cell = aux["k"], aux["Y"], aux["unit_cell"]
+    z = k * Y / s1
+    K = jax.ops.segment_sum(k, cell, n_cell_segments)
+    Z = jax.ops.segment_sum(z, cell, n_cell_segments)
+    has = K > 0
+    cells = jnp.where(has, gammaln(jnp.where(has, K, 1.0)) - K * jnp.log(jnp.where(has, Z, 1.0)), 0.0)
+    return jnp.sum(cells) - jnp.sum(gammaln(k)) + jnp.sum(k * jnp.log(z)) - jnp.sum(jnp.log(Y))
+
+
 def fisher_rows(Ibar: list, a: RatioAssignment):
     r"""Sparse rows (A, B) over all bins (passes ravelled in order), in the bins' predicted means :math:`\bar I_b`.
 

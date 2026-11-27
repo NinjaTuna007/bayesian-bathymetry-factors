@@ -44,7 +44,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from bbf import mesh as M
-from bbf.match.ratio import RatioAssignment, log_ratio_match
+from bbf.match.ratio import RatioAssignment, log_ratio_match, log_ratio_match_padded
+from bbf.match.ratio import padded as pad_assignment
 from bbf.match.reflectivity import Reflectivity
 from bbf.ping.factor import (
     WARM_ITERS,
@@ -259,27 +260,68 @@ def beam_jacobian(problem: Problem, d, psi=None, xi=None) -> list[np.ndarray]:
     return out
 
 
+RATIO_CAPACITY = 1.25  # visits and cells the compiled data term holds, relative to the first assignment it sees
+
+
+class DataTerm:
+    r"""A compiled data term :math:`F(S, \hat u_0, \psi)` and the arguments it takes from the problem's ratio assignment.
+
+    Called like a function: (value, :math:`\hat u` per pass (n, 2)). The bins the ping factor scores, the
+    held gains and the ratio match's cells, visits and shapes are arguments of the compiled function, not
+    constants in it, so `rebind` swaps in a new assignment of the same round without compiling again
+    (unless it outgrows the capacity, `RATIO_CAPACITY`).
+    """
+
+    def __init__(self, core, aux, caps, warm: bool):
+        self.core, self.aux, self.caps, self.warm = core, aux, caps, warm
+
+    def __call__(self, S_list, u0_list=None, psi=None):
+        return self.core(S_list, u0_list, psi, self.aux)
+
+    def rebind(self, problem: Problem) -> "DataTerm":
+        """The same compiled term with the arguments of `problem`, which differs from the one it was built for
+        only in its ratio assignment and gains; a new term when the assignment exceeds the capacity."""
+        a = problem.ratio
+        if self.caps is None or a is None or a.n_units > self.caps[0] or a.n_cells > self.caps[1]:
+            return data_term(problem, warm=self.warm)
+        return DataTerm(self.core, _aux(problem, self.caps), self.caps, self.warm)
+
+
+def _aux(problem: Problem, caps) -> dict:
+    """The data term's arguments that follow the ratio assignment: scored bins, gains, padded cells and visits."""
+    pb = problem
+    out = {"uses": [jnp.asarray(u) for u in pb.uses()],
+           "gains": ([jnp.zeros(y.shape[:2]) for y in pb.y] if pb.ratio_gain is None
+                     else [jnp.asarray(g, dtype=float) for g in pb.ratio_gain])}
+    if caps is not None:
+        assert pb.ratio is not None
+        out["ratio"] = pad_assignment(pb.ratio, *caps)
+    return out
+
+
 @lru_cache(maxsize=8)  # compiled once per problem (hashed by identity); a round uses a few
-def data_term(problem: Problem, warm: bool = False):
-    r"""Jitted :math:`F(S, \hat u_0, \psi)` over all passes: (value, :math:`\hat u` per pass (n, 2)).
+def data_term(problem: Problem, warm: bool = False) -> DataTerm:
+    r"""Compiled :math:`F(S, \hat u_0, \psi)` over all passes: (value, :math:`\hat u` per pass (n, 2)).
 
     :math:`\hat u_0` and :math:`\psi` may be None (cold modes; theta's :math:`\psi`). With `warm`,
     each ping-side's log-kappa mode starts from
     :math:`\hat u_0` (per pass (n, 2), e.g. the previous evaluation's) and takes only a few
     Newton steps, which is enough within a Gauss--Newton loop where the modes move little.
+    With held ratio shapes the match's arrays are padded to a capacity (`DataTerm.rebind`).
     """
     pb = problem
     dr = pb.dr
-    uses = [jnp.asarray(u) for u in pb.uses()]
     ys = [jnp.asarray(y) for y in pb.y]
     labels = [jnp.asarray(lab) for lab in pb.labels]
     valids = [jnp.ones(lab.shape, bool) for lab in labels] if pb.valid is None else [jnp.asarray(v) for v in pb.valid]
     offsets = ([jnp.zeros(y.shape[0]) for y in ys] if pb.kappa_offset is None
                else [jnp.asarray(o, dtype=float) for o in pb.kappa_offset])
     matched = pb.ratio is not None and pb.ratio.n_units > 0
+    held_gains = pb.ratio_gain is not None
+    caps = None
+    if matched and pb.ratio.shape is not None:
+        caps = (int(pb.ratio.n_units * RATIO_CAPACITY) + 16, int(pb.ratio.n_cells * RATIO_CAPACITY) + 16)
     uses_all = [jnp.asarray(u) for u in pb.uses_all()]
-    gains = ([jnp.zeros(y.shape[:2]) for y in ys] if pb.ratio_gain is None
-             else [jnp.asarray(g, dtype=float) for g in pb.ratio_gain])
 
     def ratio_mean(th, side, y, S, off, use_all, gain):
         """Predicted means (B,) the ratio match sees for one ping-side; zeros without it."""
@@ -287,8 +329,8 @@ def data_term(problem: Problem, warm: bool = False):
             return jnp.zeros_like(S)
         # the ping-side's gain: held for the round when given (`ratio_gains`); otherwise its mode over
         # every scored bin, which the gradient follows (and the curvature, `ggn.assemble`, does not)
-        u_r = gain if pb.ratio_gain is not None else mode(th, side, dr, y, S, use_all, offset=off, temper=pb.temper,
-                                                          grid=pb.mode_grid)[0]
+        u_r = gain if held_gains else mode(th, side, dr, y, S, use_all, offset=off, temper=pb.temper,
+                                           grid=pb.mode_grid)[0]
         return predicted(S, u_r, th, side, dr, off)[0]
 
     def side_terms(th, side, y, S, use, lab, val, u0, off, use_all, gain):
@@ -310,13 +352,13 @@ def data_term(problem: Problem, warm: bool = False):
 
     psi0 = _psi(pb, None)
 
-    def F(S_list, u0_list=None, psi=None):
+    def F(S_list, u0_list, psi, aux):
         th = with_psi(pb.theta, psi0 if psi is None else psi)
         total, u_hats, I_bars = 0.0, [], []
         if u0_list is None:
             u0_list = [jnp.zeros(y.shape[:2]) for y in ys]
-        for y, S, use, lab, val, u0, off, ua, gn in zip(ys, S_list, uses, labels, valids, u0_list, offsets, uses_all,
-                                                         gains):
+        for y, S, use, lab, val, u0, off, ua, gn in zip(ys, S_list, aux["uses"], labels, valids, u0_list, offsets,
+                                                         uses_all, aux["gains"]):
             us, ibs = [], []
             for side in (0, 1):
                 v, uh, ib = jax.vmap(lambda yy, SS, uu, ll, vv, u0s, oo, aa, gg, side=side:
@@ -330,10 +372,12 @@ def data_term(problem: Problem, warm: bool = False):
             I_bars.append(jnp.stack(ibs, axis=1))
         if matched:
             assert pb.ratio is not None
-            total = total + pb.temper * log_ratio_match(I_bars, pb.ratio)
+            lr = (log_ratio_match_padded(I_bars, aux["ratio"], caps[0], caps[0] + caps[1]) if caps is not None
+                  else log_ratio_match(I_bars, pb.ratio))
+            total = total + pb.temper * lr
         return total, u_hats
 
-    return jax.jit(F)
+    return DataTerm(jax.jit(F), _aux(pb, caps), caps, warm)
 
 
 def ratio_gains(problem: Problem, S, psi=None) -> list[np.ndarray]:
@@ -456,16 +500,23 @@ def value_and_grad(problem: Problem, d, beta, F=None, u0=None, psi=None, S=None,
     return value, (grad_d + gd_prior + g_fr + g_hz, gb_prior), details
 
 
-def value(problem: Problem, d, beta, F=None, u0=None, psi=None, keep: dict | None = None, xi=None) -> float:
+def value(problem: Problem, d, beta, F=None, u0=None, psi=None, keep: dict | None = None, xi=None,
+          footprints: bool = False) -> float:
     r""":math:`\ell(d, \beta, \psi, \xi)` alone: one render and the data term, no gradient (warm with u0, as `value_and_grad`).
 
-    keep: a dict that receives the render as "S", to pass on to `value_and_grad` at the same point.
+    keep: a dict that receives the render as "S", to pass on to `value_and_grad` at the same point, and
+    with `footprints` the bins' footprints from the same render as "fp" (`render_footprints`), for a new
+    ratio assignment there.
     """
     F = data_term(problem) if F is None else F
     psi = _psi(problem, psi)
-    S = render(problem, d, psi, xi)
+    if footprints:
+        S, fp = render_footprints(problem, d, psi, xi)
+    else:
+        S, fp = render(problem, d, psi, xi), None
     if keep is not None:
         keep["S"] = S
+        keep["fp"] = fp
     val, _ = F(*_args(S, u0, psi))
     return (float(val) + problem.prior.log_density(np.asarray(d), np.asarray(beta))
             + problem.psi_log_prior(psi)[0] + problem.xi_log_prior(_xi(problem, xi))[0]
