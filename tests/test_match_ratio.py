@@ -543,3 +543,30 @@ def test_assign_keeps_the_keys_of_the_matched_cells():
     unit = np.concatenate([u.ravel() for u in a.unit])
     on = unit >= 0
     np.testing.assert_array_equal(np.floor(q[on]).astype(int), a.cell_key[a.unit_cell[unit[on]]])
+
+
+def test_a_temper_schedule_sets_each_rounds_temper():
+    """A sequence of tempers is a continuation: each round's problem carries its entry, the last one repeated."""
+    from bbf.inference.loop import infer
+    from bbf.io import Pass
+    m = M.build(-30.0, 30.0, -8.0, 8.0, h=1.0, origin=(0.0, 0.0), z_ref=0.0)
+    v = m.vertices
+    d_true = np.asarray(20.0 - 2.0 * np.exp(-((v[:, 0] - 2) ** 2 + v[:, 1] ** 2) / (2 * 4.0**2)))
+    th = P.Theta(noise=1e-7, L=5.0, eps=0.02, eta=1e-6, zeta=1e-6, ell=1.0, log_kappa_mean=0.0, log_kappa_std=0.5)
+    n_bins, dr = 300, 0.1
+    u = P.u_grid(n_bins, dr, du=0.05)
+    rng = np.random.default_rng(7)
+    passes = []
+    for i, x0 in enumerate((-5.0, 5.0)):
+        poses = np.column_stack([np.full(5, x0), np.linspace(-2, 2, 5), np.full(5, -5.0), np.zeros((5, 3))])
+        S = np.asarray(P.unit_intensities(m, jnp.asarray(d_true), poses, th, u, n_bins, dr))
+        passes.append(Pass(name=f"x{x0}", poses=poses, y=rng.gamma(th.L, (S + 1e-7) / th.L), dr=dr,
+                           t=np.arange(5) * 0.1 + 100.0 * i))
+    beta = np.array([0.0, 0.0, 20.0])
+    prior = PR.Prior(m, 5.0, 2.0, mu_beta=beta, Sigma_beta=np.diag([0.01, 0.01, 4.0]))
+    lines = []
+    out = infer(passes, m, prior, th, np.full(m.n_vertices, 20.0), beta, u, rounds=3, inner=1, calib_every=3, chunk=5,
+                ratio=RatioMatch(cell=1.0, model_sd=0.3), temper=[0.1, 1.0], log=lines.append)
+    assert [s for s in lines if "(continuation)" in s] == [
+        "round 0: temper 0.1 (continuation)", "round 1: temper 1.0 (continuation)", "round 2: temper 1.0 (continuation)"]
+    assert out["problem"].temper == 1.0

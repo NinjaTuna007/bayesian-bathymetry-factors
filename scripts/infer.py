@@ -123,7 +123,8 @@ def main():
     ap.add_argument("--hold-out", type=int, default=0, help="leave every N-th ping out of the fit (0: none)")
     ap.add_argument("--levels", nargs="+", default=None, metavar="K:ROUNDS:STEPS",
                     help="bins averaged, rounds and Gauss-Newton steps per level (default 27:1:6 9:1:6 3:2:6)")
-    ap.add_argument("--temper", type=float, default=1.0, help="factor on the intensity log likelihood")
+    ap.add_argument("--temper", type=float, nargs="+", default=[1.0], metavar="TAU",
+                    help="factor on the intensity log likelihood; several: one per round (continuation), the last repeated")
     ap.add_argument("--bank-start", action="store_true",
                     help="raise a bank in the start where a ping's other side echoes earlier (default: the later echo alone)")
     ap.add_argument("--bank-top", type=float, default=None, metavar="M",
@@ -290,7 +291,8 @@ def main():
         out = infer(cp, mesh, prior_of(beta), th, d, beta, u, rounds=rounds, inner=inner, calib_every=50,
                     chunk=chunk, psi_prior=psi_prior, psi_held=psi_held, refl=refl, xi0=xi,
                     first_return=first_return, min_range=TVG.MIN_RANGE, fit_shape=args.hold_shape is None,
-                    horizon=Horizon() if args.horizon else None, mode_grid=MODE_GRID, shadow_stop=False, temper=args.temper, field_steps=FIELD_STEPS,
+                    horizon=Horizon() if args.horizon else None, mode_grid=MODE_GRID, shadow_stop=False, temper=args.temper[0] if len(args.temper) == 1 else args.temper,
+                    field_steps=FIELD_STEPS,
                     kappa_std=args.kappa_std or None, far_edge=args.far_edge, far_extent=args.far_extent, ratio=ratio,
                     coarse=args.coarse, slope_seen=not args.slope_everywhere,
                     log=log, **extra)
